@@ -1,0 +1,2 @@
+# Shared base dependencies for Insight Forge
+# Backend and frontend have their own requirements.txt
