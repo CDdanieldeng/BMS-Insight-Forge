@@ -9,6 +9,7 @@ from shared.logging_config import setup_logging
 
 from generation.key_questions import get_questions_for_module
 from generation.llm_client import complete
+from generation.slide_prompts import get_prompt_builder
 
 logger = setup_logging("generation")
 
@@ -31,7 +32,7 @@ def _has_placeholder_columns(columns: list[str]) -> bool:
     return bool(data_cols) and all(_SEGMENT_PLACEHOLDER_RE.match(c) for c in data_cols)
 
 # Lazy imports to avoid circular deps
-def _retriever_search(file_ids: list[str], query: str, top_k: int = 12) -> str:
+def _retriever_search(file_ids: list[str], query: str, top_k: int = 16) -> str:
     from retriever.chunker import bm25_retrieve
     from retriever.router import _chunk_store
     start = time.perf_counter()
@@ -117,7 +118,7 @@ Output ONLY valid JSON, no explanation."""
 Number of segments needed: {n_segments}
 
 Content from uploaded documents:
-{retriever_content[:6000]}
+{retriever_content}
 
 Return a JSON array of exactly {n_segments} segment names:"""
 
@@ -156,11 +157,15 @@ def generate_table_content(
 ) -> list[list[str]]:
     """
     Use LLM to generate table cell values from retriever content and table structure.
-    If segment_names is provided they replace placeholder column headers in the prompt
-    so the LLM generates content specific to each real segment.
+
+    If a slide-specific prompt builder is registered for *module* it is used;
+    otherwise falls back to the generic business-analyst prompt.
+
+    If segment_names is provided they replace placeholder column headers in the
+    prompt so the LLM generates content specific to each real segment.
+
     Returns 2D list: rows of cell values (excluding header row and index column).
     """
-    questions = get_questions_for_module(module)
     columns = table_structure.get("columns", [])
     indexes = table_structure.get("indexes", [])
 
@@ -174,29 +179,46 @@ def generate_table_content(
     if not data_columns:
         data_columns = effective_columns[1:] if len(effective_columns) > 1 else effective_columns
 
-    system = """You are a business analyst. Fill the table based on the provided context and key business questions.
-Output a JSON array of arrays. Each inner array is one row of data (excluding the header row).
-The number of values per row must match the number of data columns.
-Use concise, professional language. If context is insufficient, provide reasonable placeholder text.
-Output ONLY valid JSON, no markdown or explanation."""
+    # ── Try slide-specific prompt builder ────────────────────────────────────
+    prompt_builder = get_prompt_builder(module)
+    if prompt_builder is not None:
+        logger.info("Using slide-specific prompt for module=%s", module)
+        system, user = prompt_builder(
+            retriever_content[:8000],
+            indexes,
+            data_columns,
+        )
+    else:
+        # ── Generic fallback prompt ───────────────────────────────────────────
+        questions = get_questions_for_module(module)
+        system = (
+            "You are a business analyst. Fill the table based on the provided context "
+            "and key business questions.\n"
+            "Output a JSON array of arrays. Each inner array is one row of data "
+            "(excluding the header row).\n"
+            "The number of values per row must match the number of data columns.\n"
+            "Use concise, professional language. If context is insufficient, "
+            "provide reasonable placeholder text.\n"
+            "Output ONLY valid JSON, no markdown or explanation."
+        )
+        user = (
+            f"Context from support documents:\n{retriever_content[:8000]}\n\n"
+            f"Key business questions for {module}:\n"
+            + "\n".join(f"- {q}" for q in questions)
+            + f"\n\nTable structure:\n"
+            f"- Column headers (segments): {effective_columns}\n"
+            f"- Row labels (attributes): {indexes}\n\n"
+            "Generate table data as JSON array of arrays. "
+            "Example format: [[\"val1\",\"val2\"],[\"val1\",\"val2\"],...]\n"
+            "Each inner array corresponds to one row label. "
+            "Values correspond to each segment column.\n"
+            f"Number of rows = {len(indexes)}, "
+            f"number of values per row = {len(data_columns)}\n"
+            "IMPORTANT: Each cell value MUST be 18 words or fewer. Be concise and direct."
+        )
 
-    user = f"""Context from support documents:
-{retriever_content[:8000]}
-
-Key business questions for {module}:
-{chr(10).join(f'- {q}' for q in questions)}
-
-Table structure:
-- Column headers (segments): {effective_columns}
-- Row labels (attributes): {indexes}
-
-Generate table data as JSON array of arrays. Example format: [["val1","val2"],["val1","val2"],...]
-Each inner array corresponds to one row label. Values correspond to each segment column.
-Number of rows = {len(indexes)}, number of values per row = {len(data_columns)}
-IMPORTANT: Each cell value MUST be 18 words or fewer. Be concise and direct."""
-
-    # Cap output: ~60 tokens per cell × rows × cols, with a buffer
-    _max_out = min(3000, max(1500, len(indexes) * len(data_columns) * 80))
+    # Cap output: ~80 tokens per cell × rows × cols, with a buffer
+    _max_out = min(4000, max(1500, len(indexes) * len(data_columns) * 80))
 
     try:
         start = time.perf_counter()

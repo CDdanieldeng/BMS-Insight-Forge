@@ -18,6 +18,14 @@ API_SESSION.trust_env = False
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 TEMPLATE_PATH = os.getenv("TEMPLATE_PPTX_PATH", "/app/example_files/example slides.pptx")
+
+# API timeouts (configurable via .env)
+TIMEOUT_QUICK = float(os.getenv("TIMEOUT_QUICK", "10"))
+TIMEOUT_RENDER_PNG = float(os.getenv("TIMEOUT_RENDER_PNG", "20"))
+TIMEOUT_KEY_QUESTIONS = float(os.getenv("TIMEOUT_KEY_QUESTIONS", "5"))
+TIMEOUT_INGEST = float(os.getenv("TIMEOUT_INGEST", "60"))
+TIMEOUT_LLM_GENERATION = float(os.getenv("TIMEOUT_LLM_GENERATION", "200"))
+TIMEOUT_FILL_TABLE = float(os.getenv("TIMEOUT_FILL_TABLE", "30"))
 _template_candidate = Path(TEMPLATE_PATH)
 if not _template_candidate.is_absolute() or not _template_candidate.exists():
     _local = Path(__file__).resolve().parent.parent / "example_files" / "example slides.pptx"
@@ -81,7 +89,7 @@ def load_slide_info() -> list:
         resp = API_SESSION.post(
             f"{BACKEND_URL}/fill-engine/slide-info-from-path",
             data={"path": TEMPLATE_PATH},
-            timeout=10,
+            timeout=TIMEOUT_QUICK,
         )
         resp.raise_for_status()
         return resp.json()
@@ -107,7 +115,7 @@ def fetch_slide_png(slide_idx: int, pptx_bytes: bytes | None = None) -> bytes | 
             f"{BACKEND_URL}/fill-engine/render-slide-png",
             data=data,
             files=files,
-            timeout=20,
+            timeout=TIMEOUT_RENDER_PNG,
         )
         resp.raise_for_status()
         return resp.content
@@ -127,7 +135,7 @@ def get_slides_by_module(slide_info: list) -> dict[str, list]:
 
 def fetch_key_questions(module: str) -> list[str]:
     try:
-        r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=5)
+        r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=TIMEOUT_KEY_QUESTIONS)
         if r.ok:
             return r.json().get("questions", [])
     except Exception:
@@ -150,7 +158,7 @@ def _ingest_and_answer(module: str, uploaded_files) -> bool:
     resp = API_SESSION.post(
         f"{BACKEND_URL}/retriever/ingest",
         files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
-        timeout=60,
+        timeout=TIMEOUT_INGEST,
     )
     if not resp.ok:
         st.error(f"Ingest failed: {resp.text}")
@@ -175,7 +183,7 @@ def _ingest_and_answer(module: str, uploaded_files) -> bool:
         ans_r = API_SESSION.post(
             f"{BACKEND_URL}/generation/key-answers",
             json={"module": module, "file_ids": file_ids},
-            timeout=200,
+            timeout=TIMEOUT_LLM_GENERATION,
         )
         ans_r.raise_for_status()
         st.session_state.key_question_answers[module] = ans_r.json().get("answers", [])
@@ -194,7 +202,7 @@ def _ingest_only(module: str, uploaded_files) -> bool:
     resp = API_SESSION.post(
         f"{BACKEND_URL}/retriever/ingest",
         files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
-        timeout=60,
+        timeout=TIMEOUT_INGEST,
     )
     if not resp.ok:
         st.error(f"Ingest failed: {resp.text}")
@@ -375,7 +383,7 @@ def render_landing_page(module: str, slides: list):
                         ans_r = API_SESSION.post(
                             f"{BACKEND_URL}/generation/key-answers",
                             json={"module": module, "file_ids": module_fids},
-                            timeout=200,
+                            timeout=TIMEOUT_LLM_GENERATION,
                         )
                         ans_r.raise_for_status()
                         st.session_state.key_question_answers[module] = (
@@ -487,7 +495,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                         r = API_SESSION.post(
                             f"{BACKEND_URL}/fill-engine/table-structure",
                             data={"slide_idx": slide_idx, "path": TEMPLATE_PATH},
-                            timeout=10,
+                            timeout=TIMEOUT_QUICK,
                         )
                         r.raise_for_status()
                         table_structure = r.json()
@@ -505,7 +513,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                                 "file_ids": module_fids,
                                 "table_structure": table_structure,
                             },
-                            timeout=200,
+                            timeout=TIMEOUT_LLM_GENERATION,
                         )
                         fill_resp.raise_for_status()
                         fill_result = fill_resp.json()
@@ -536,7 +544,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                             f"{BACKEND_URL}/fill-engine/fill-table",
                             data=form_data,
                             files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                            timeout=30,
+                            timeout=TIMEOUT_FILL_TABLE,
                         )
                         fill_r.raise_for_status()
                         st.session_state.pptx_bytes = base64.b64decode(
@@ -579,7 +587,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                             "table_structure": table_structure,
                             "user_message": user_msg,
                         },
-                        timeout=200,
+                        timeout=TIMEOUT_LLM_GENERATION,
                     )
                     r.raise_for_status()
                     updated = r.json().get("table_data", [])
@@ -593,7 +601,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                                 ).decode(),
                             },
                             files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                            timeout=30,
+                            timeout=TIMEOUT_FILL_TABLE,
                         )
                         fill_r.raise_for_status()
                         st.session_state.pptx_bytes = base64.b64decode(
