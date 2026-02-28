@@ -25,7 +25,7 @@ def _build_http_client() -> httpx.Client:
         or os.getenv("SSL_CERT_FILE")
         or os.getenv("REQUESTS_CA_BUNDLE")
     )
-    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "60"))
+    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "120"))
 
     verify: bool | str = True
     if verify_env in {"0", "false", "no", "off"}:

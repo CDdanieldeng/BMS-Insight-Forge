@@ -76,10 +76,15 @@ async def fill_table_endpoint(
     slide_idx: int = Form(...),
     file: UploadFile = File(...),
     table_data_b64: str = Form(...),
+    column_headers_b64: str | None = Form(None),
 ) -> dict[str, str]:
     """
     Fill table and return updated pptx bytes (base64 encoded in response).
-    table_data_b64: base64-encoded JSON array of rows, each row is array of cell values.
+
+    table_data_b64:     base64-encoded JSON 2-D array of cell values
+                        (no header row, no index column).
+    column_headers_b64: optional base64-encoded JSON array of segment name strings
+                        that replace placeholder column headers (row 0, cols 1+).
     """
     import json
 
@@ -87,6 +92,7 @@ async def fill_table_endpoint(
         raise HTTPException(status_code=400, detail="Expected .pptx file")
 
     content = await file.read()
+
     try:
         table_data_raw = base64.b64decode(table_data_b64).decode("utf-8")
         table_data = json.loads(table_data_raw)
@@ -96,8 +102,19 @@ async def fill_table_endpoint(
     if not isinstance(table_data, list) or not all(isinstance(r, list) for r in table_data):
         raise HTTPException(status_code=400, detail="table_data must be list of lists")
 
+    column_headers: list[str] | None = None
+    if column_headers_b64:
+        try:
+            raw = base64.b64decode(column_headers_b64).decode("utf-8")
+            column_headers = json.loads(raw)
+            if not isinstance(column_headers, list):
+                raise ValueError("Expected a list")
+            column_headers = [str(h) for h in column_headers]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid column_headers: {e}")
+
     try:
-        result_bytes = fill_table(content, slide_idx, table_data)
+        result_bytes = fill_table(content, slide_idx, table_data, column_headers=column_headers)
         return {"pptx_base64": base64.b64encode(result_bytes).decode("utf-8")}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

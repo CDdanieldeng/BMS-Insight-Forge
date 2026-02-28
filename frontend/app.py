@@ -7,28 +7,17 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-
 import requests
 
-# Load .env from project root (parent of frontend/)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import streamlit as st
 from st_pptx_viewer import pptx_viewer, PptxViewerConfig
 
-# Use a dedicated session for local backend calls.
-# This avoids accidental routing through corporate/system HTTP proxies.
 API_SESSION = requests.Session()
 API_SESSION.trust_env = False
 
-# Configuration
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
-# Template path: backend resolves this when we call slide-info/table-structure.
-# Docker: /app/example_files/example slides.pptx. Local: set via env or use default.
-TEMPLATE_PATH = os.getenv(
-    "TEMPLATE_PPTX_PATH",
-    "/app/example_files/example slides.pptx",
-)
-# Resolve to absolute path so backend (which may run from backend/) can find it
+TEMPLATE_PATH = os.getenv("TEMPLATE_PPTX_PATH", "/app/example_files/example slides.pptx")
 _template_candidate = Path(TEMPLATE_PATH)
 if not _template_candidate.is_absolute() or not _template_candidate.exists():
     _local = Path(__file__).resolve().parent.parent / "example_files" / "example slides.pptx"
@@ -37,35 +26,57 @@ if not _template_candidate.is_absolute() or not _template_candidate.exists():
 elif _template_candidate.exists():
     TEMPLATE_PATH = str(_template_candidate.resolve())
 
+MODULES = ["Customer Segmentation", "Messaging Strategy"]
+MODULE_ICONS = {"Customer Segmentation": "👥", "Messaging Strategy": "💬"}
+MODULE_DESC = {
+    "Customer Segmentation": (
+        "Identify and define the key stakeholders along the patient journey, "
+        "segment them by value and receptivity, and pinpoint the specific "
+        "behavior changes needed at each leverage point."
+    ),
+    "Messaging Strategy": (
+        "Craft targeted messages that support behavior change objectives, "
+        "pull through the Unified Brand Story, and address drivers and barriers "
+        "versus the competitive set."
+    ),
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session state
+# ─────────────────────────────────────────────────────────────────────────────
 
 def init_session_state():
-    """Initialize session state."""
-    if "started" not in st.session_state:
-        st.session_state.started = False
-    if "slide_info" not in st.session_state:
-        st.session_state.slide_info = []
-    if "fillable_indices" not in st.session_state:
-        st.session_state.fillable_indices = []
-    if "current_fillable_idx" not in st.session_state:
-        st.session_state.current_fillable_idx = 0
-    if "pptx_bytes" not in st.session_state:
-        st.session_state.pptx_bytes = None
-    if "file_ids" not in st.session_state:
-        st.session_state.file_ids = []
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = {}
-    if "filled_slides" not in st.session_state:
-        st.session_state.filled_slides = set()
-    if "table_data_by_slide" not in st.session_state:
-        st.session_state.table_data_by_slide = {}
-    if "slide_png_cache" not in st.session_state:
-        st.session_state.slide_png_cache = {}
-    if "key_question_answers" not in st.session_state:
-        st.session_state.key_question_answers = {}
+    defaults = {
+        "started": False,
+        "slide_info": [],
+        "fillable_indices": [],
+        # 0 = module landing page; 1..N = slide pages
+        "current_page_by_module": {m: 0 for m in MODULES},
+        "pptx_bytes": None,
+        # Per-module file ids — files are NOT shared across modules
+        "file_ids_by_module": {m: [] for m in MODULES},
+        "filled_slides": set(),
+        "table_data_by_slide": {},
+        "slide_png_cache": {},
+        "key_question_answers": {},
+        "column_headers_by_slide": {},
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
 
-def load_slide_info():
-    """Fetch slide info from backend."""
+def _module_file_ids(module: str) -> list[str]:
+    """Return the ingested file_ids for the given module."""
+    return st.session_state.file_ids_by_module.get(module, [])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_slide_info() -> list:
     try:
         resp = API_SESSION.post(
             f"{BACKEND_URL}/fill-engine/slide-info-from-path",
@@ -80,29 +91,18 @@ def load_slide_info():
 
 
 def load_template_bytes() -> bytes | None:
-    """Load template pptx bytes."""
     path = Path(TEMPLATE_PATH)
-    if path.exists():
-        return path.read_bytes()
-    return None
+    return path.read_bytes() if path.exists() else None
 
 
-def fetch_slide_png(
-    slide_idx: int,
-    pptx_bytes: bytes | None = None,
-    path: str | None = None,
-) -> bytes | None:
-    """
-    Fetch slide PNG from backend renderer.
-    Uses in-memory pptx if provided; otherwise backend reads from template path.
-    """
+def fetch_slide_png(slide_idx: int, pptx_bytes: bytes | None = None) -> bytes | None:
     try:
         data = {"slide_idx": str(slide_idx)}
         files = None
         if pptx_bytes:
             files = {"file": ("deck.pptx", pptx_bytes)}
         else:
-            data["path"] = path or TEMPLATE_PATH
+            data["path"] = TEMPLATE_PATH
         resp = API_SESSION.post(
             f"{BACKEND_URL}/fill-engine/render-slide-png",
             data=data,
@@ -115,6 +115,607 @@ def fetch_slide_png(
         return None
 
 
+def get_slides_by_module(slide_info: list) -> dict[str, list]:
+    grouped: dict[str, list] = {m: [] for m in MODULES}
+    for s in slide_info:
+        if s.get("is_fillable"):
+            m = s.get("module", "Unknown")
+            if m in grouped:
+                grouped[m].append(s)
+    return grouped
+
+
+def fetch_key_questions(module: str) -> list[str]:
+    try:
+        r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=5)
+        if r.ok:
+            return r.json().get("questions", [])
+    except Exception:
+        pass
+    return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module Landing Page  (page index = 0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ingest_and_answer(module: str, uploaded_files) -> bool:
+    """
+    Step 1: ingest uploaded files into the retriever store (scoped to this module).
+    Step 2: immediately call LLM to answer key questions for this module.
+    Returns True on success.
+    Files from OTHER modules are unaffected.
+    """
+    # 1. Ingest
+    resp = API_SESSION.post(
+        f"{BACKEND_URL}/retriever/ingest",
+        files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
+        timeout=60,
+    )
+    if not resp.ok:
+        st.error(f"Ingest failed: {resp.text}")
+        return False
+
+    data = resp.json()
+    file_ids: list[str] = data.get("file_ids", [])
+    # Store only for this module; leave other modules untouched
+    st.session_state.file_ids_by_module[module] = file_ids
+    # Clear stale answers for THIS module only
+    st.session_state.key_question_answers.pop(module, None)
+
+    for err in data.get("errors", []):
+        st.warning(f"Skipped {err.get('file', '?')}: {err.get('error', '')}")
+
+    if not file_ids:
+        st.warning("No files were successfully ingested.")
+        return False
+
+    # 2. Generate LLM answers for this module
+    try:
+        ans_r = API_SESSION.post(
+            f"{BACKEND_URL}/generation/key-answers",
+            json={"module": module, "file_ids": file_ids},
+            timeout=120,
+        )
+        ans_r.raise_for_status()
+        st.session_state.key_question_answers[module] = ans_r.json().get("answers", [])
+    except Exception as e:
+        st.warning(f"Files ingested, but answer generation failed: {e}")
+
+    return True
+
+
+def _ingest_only(module: str, uploaded_files) -> bool:
+    """
+    Ingest new files on a slide page (no answer regeneration).
+    Replaces the current module's file_ids.
+    Returns True on success.
+    """
+    resp = API_SESSION.post(
+        f"{BACKEND_URL}/retriever/ingest",
+        files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
+        timeout=60,
+    )
+    if not resp.ok:
+        st.error(f"Ingest failed: {resp.text}")
+        return False
+
+    data = resp.json()
+    file_ids: list[str] = data.get("file_ids", [])
+    st.session_state.file_ids_by_module[module] = file_ids
+
+    for err in data.get("errors", []):
+        st.warning(f"Skipped {err.get('file', '?')}: {err.get('error', '')}")
+
+    if not file_ids:
+        st.warning("No files were successfully ingested.")
+        return False
+
+    return True
+
+
+def render_landing_page(module: str, slides: list):
+    """Module home page: hero header, Q&A panel, file upload panel."""
+
+    icon = MODULE_ICONS.get(module, "📋")
+    desc = MODULE_DESC.get(module, "")
+    n_slides = len(slides)
+    n_filled = sum(1 for s in slides if s["idx"] in st.session_state.filled_slides)
+    answers = st.session_state.key_question_answers.get(module, [])
+    has_answers = bool(answers)
+
+    # ── Module hero header ─────────────────────────────────────────────────
+    st.markdown(
+        f"""
+        <style>
+        .lp-hero {{
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+            border-radius: 16px; padding: 2.5rem 3rem 2rem;
+            margin-bottom: 1.8rem; color: white;
+        }}
+        .lp-icon  {{ font-size: 2.8rem; margin-bottom: 0.4rem; }}
+        .lp-title {{ font-size: 2.2rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.5px; }}
+        .lp-desc  {{ font-size: 1rem; opacity: 0.8; max-width: 680px; line-height: 1.6; }}
+        .lp-badge {{
+            display: inline-block; background: rgba(255,255,255,0.15);
+            border-radius: 20px; padding: 0.25rem 0.9rem;
+            font-size: 0.85rem; margin-top: 1rem;
+        }}
+        .kq-wrap {{ margin-bottom: 1rem; }}
+        .kq-card {{
+            background: #f8f9ff; border: 1px solid #e2e6f3; border-radius: 12px;
+            padding: 1rem 1.2rem; margin-bottom: 0.75rem;
+        }}
+        .kq-card.answered {{ background: #f0faf4; border-color: #b7dfc8; }}
+        .kq-header {{ display: flex; align-items: flex-start; gap: 0.6rem; margin-bottom: 0; }}
+        .kq-num {{
+            flex-shrink: 0; background: #1a1a2e; color: white; border-radius: 50%;
+            width: 24px; height: 24px; text-align: center; line-height: 24px;
+            font-size: 0.75rem; font-weight: 700;
+        }}
+        .kq-num.done {{ background: #1a7a4a; }}
+        .kq-text  {{ font-size: 0.95rem; color: #2c2c4a; line-height: 1.5; font-weight: 600; }}
+        .kq-answer {{
+            margin-top: 0.6rem; padding-top: 0.6rem;
+            border-top: 1px solid #d0e8d8;
+            font-size: 0.9rem; color: #2a4a35; line-height: 1.6;
+        }}
+        .file-panel {{
+            background: #fafafa; border: 1px solid #e8e8f0; border-radius: 14px;
+            padding: 1.4rem 1.4rem 1rem;
+        }}
+        .step-label {{
+            font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 1px; color: #888; margin-bottom: 0.3rem;
+        }}
+        </style>
+        <div class="lp-hero">
+            <div class="lp-icon">{icon}</div>
+            <div class="lp-title">{module}</div>
+            <div class="lp-desc">{desc}</div>
+            <div class="lp-badge">{'✅ ' + str(n_filled) + '/' + str(n_slides) + ' slides filled' if n_slides else 'No slides configured'}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Two-column body ────────────────────────────────────────────────────
+    col_q, col_f = st.columns([3, 2], gap="large")
+
+    # ── Left: Key Questions + LLM Answers ─────────────────────────────────
+    with col_q:
+        st.markdown("#### 🔑 Key Business Questions")
+
+        if not has_answers:
+            st.caption(
+                "Upload your support documents on the right and click **Ingest & Analyze** "
+                "— the AI will answer each question based on your files."
+            )
+
+        questions = fetch_key_questions(module)
+        answer_map = {item.get("question", ""): item.get("answer", "") for item in answers}
+
+        if questions:
+            cards_html = '<div class="kq-wrap">'
+            for i, q in enumerate(questions, 1):
+                import html as _html
+                ans_text = answer_map.get(q, "")
+                answered = bool(
+                    ans_text and ans_text != "Insufficient evidence in uploaded documents."
+                )
+                card_cls = "kq-card answered" if answered else "kq-card"
+                num_cls = "kq-num done" if answered else "kq-num"
+                answer_part = (
+                    f'<div class="kq-answer">💡 {_html.escape(ans_text)}</div>'
+                    if ans_text
+                    else ""
+                )
+                cards_html += (
+                    f'<div class="{card_cls}">'
+                    f'<div class="kq-header">'
+                    f'<span class="{num_cls}">{i}</span>'
+                    f'<span class="kq-text">{_html.escape(q)}</span>'
+                    f"</div>"
+                    f"{answer_part}"
+                    f"</div>"
+                )
+            cards_html += "</div>"
+            st.markdown(cards_html, unsafe_allow_html=True)
+        else:
+            st.caption("(Could not load questions — is the backend running?)")
+
+    # ── Right: File upload + analyze ──────────────────────────────────────
+    with col_f:
+        st.markdown("#### 📂 Support Files")
+
+        module_fids = _module_file_ids(module)
+
+        # Status badge
+        if module_fids:
+            status_label = (
+                f"✅ {len(module_fids)} file(s) ingested"
+                + (" · answers ready" if has_answers else " · answers not yet generated")
+            )
+            st.success(status_label)
+
+        uploaded = st.file_uploader(
+            "Upload .pptx or .docx support documents",
+            type=["pptx", "docx", "doc"],
+            accept_multiple_files=True,
+            key=f"uploader_{module}",
+            help="Files are scoped to this module and will not affect other modules.",
+        )
+
+        if uploaded:
+            btn_label = f"Ingest & Analyze ({len(uploaded)} file{'s' if len(uploaded) > 1 else ''})"
+            if st.button(
+                btn_label,
+                type="primary",
+                use_container_width=True,
+                key=f"ingest_{module}",
+            ):
+                with st.spinner(
+                    "Step 1/2 — Ingesting files…  \n"
+                    "Step 2/2 — AI is answering key questions…"
+                ):
+                    ok = _ingest_and_answer(module, uploaded)
+                if ok:
+                    st.rerun()
+
+        # Re-generate answers without re-uploading
+        elif module_fids and not has_answers:
+            st.caption("Files already ingested. Generate answers:")
+            if st.button(
+                "Generate Key Question Answers",
+                use_container_width=True,
+                key=f"regen_answers_{module}",
+            ):
+                with st.spinner("AI is answering key questions from uploaded documents…"):
+                    try:
+                        ans_r = API_SESSION.post(
+                            f"{BACKEND_URL}/generation/key-answers",
+                            json={"module": module, "file_ids": module_fids},
+                            timeout=120,
+                        )
+                        ans_r.raise_for_status()
+                        st.session_state.key_question_answers[module] = (
+                            ans_r.json().get("answers", [])
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+
+        # Navigate to slides
+        if n_slides:
+            st.divider()
+            ready = bool(module_fids)
+            if not ready:
+                st.caption("⬆ Ingest support files before filling slides.")
+            if st.button(
+                "Start filling slides →",
+                type="primary" if ready else "secondary",
+                use_container_width=True,
+                key=f"goto_slides_{module}",
+                disabled=not ready,
+            ):
+                st.session_state.current_page_by_module[module] = 1
+                st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Slide page  (page index = 1..N)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_slide_panel(slide_meta: dict):
+    slide_idx = slide_meta["idx"]
+    pptx_bytes = st.session_state.pptx_bytes
+    if not pptx_bytes:
+        st.warning("No PPTX loaded.")
+        return
+
+    deck_hash = hashlib.sha1(pptx_bytes).hexdigest()[:12]
+    cache_key = f"{slide_idx}:{deck_hash}"
+    png_cache = st.session_state.slide_png_cache
+    slide_png = png_cache.get(cache_key)
+    if slide_png is None:
+        slide_png = fetch_slide_png(slide_idx=slide_idx, pptx_bytes=pptx_bytes)
+        if slide_png:
+            png_cache.clear()
+            png_cache[cache_key] = slide_png
+
+    if slide_png:
+        st.image(slide_png, use_container_width=True)
+    else:
+        st.caption("PNG render unavailable — falling back to PPTX viewer.")
+        config = PptxViewerConfig(
+            width=900,
+            initial_slide=slide_idx,
+            show_toolbar=True,
+            show_slide_counter=True,
+            enable_keyboard=True,
+        )
+        pptx_viewer(pptx_bytes, config=config, key=f"viewer_{slide_idx}")
+
+
+def render_controls_panel(slide_meta: dict, module: str):
+    slide_idx = slide_meta["idx"]
+    module_fids = _module_file_ids(module)
+
+    # ── Support files (compact, for slide page) ────────────────────────────
+    with st.expander(
+        f"📂 Support Files — {len(module_fids)} ingested" if module_fids else "📂 Support Files (none)",
+        expanded=not bool(module_fids),
+    ):
+        new_files = st.file_uploader(
+            "Replace / add files for this module",
+            type=["pptx", "docx", "doc"],
+            accept_multiple_files=True,
+            key=f"slide_uploader_{slide_idx}",
+            help="Uploading new files replaces the current set for this module only.",
+        )
+        if new_files:
+            if st.button(
+                f"Ingest {len(new_files)} file{'s' if len(new_files) > 1 else ''}",
+                use_container_width=True,
+                key=f"slide_ingest_{slide_idx}",
+            ):
+                with st.spinner("Ingesting files…"):
+                    ok = _ingest_only(module, new_files)
+                if ok:
+                    st.success(
+                        f"Ingested {len(st.session_state.file_ids_by_module[module])} file(s). "
+                        "Re-fill the slide to use the new documents."
+                    )
+                    st.rerun()
+
+    st.divider()
+
+    # ── Fill Slide ─────────────────────────────────────────────────────────
+    if st.button(
+        "Fill Slide Template",
+        type="primary",
+        use_container_width=True,
+        key=f"fill_{slide_idx}",
+    ):
+        if not module_fids:
+            st.warning("No files ingested for this module yet. Upload files above.")
+        else:
+            table_structure = slide_meta.get("table_structure")
+            if not table_structure:
+                with st.spinner("Fetching table structure..."):
+                    try:
+                        r = API_SESSION.post(
+                            f"{BACKEND_URL}/fill-engine/table-structure",
+                            data={"slide_idx": slide_idx, "path": TEMPLATE_PATH},
+                            timeout=10,
+                        )
+                        r.raise_for_status()
+                        table_structure = r.json()
+                    except Exception as e:
+                        st.error(f"Table structure error: {e}")
+
+            if table_structure:
+                with st.spinner("Generating content…"):
+                    try:
+                        fill_resp = API_SESSION.post(
+                            f"{BACKEND_URL}/generation/fill",
+                            json={
+                                "slide_idx": slide_idx,
+                                "module": module,
+                                "file_ids": module_fids,
+                                "table_structure": table_structure,
+                            },
+                            timeout=90,
+                        )
+                        fill_resp.raise_for_status()
+                        fill_result = fill_resp.json()
+                        table_data = fill_result.get("table_data", [])
+                        column_headers = fill_result.get("column_headers")  # list[str] | None
+                    except Exception as e:
+                        st.error(f"Generation error: {e}")
+                        table_data = []
+                        column_headers = None
+
+                if column_headers:
+                    st.info(f"Segments identified: {', '.join(column_headers)}")
+
+                if table_data and st.session_state.pptx_bytes:
+                    try:
+                        form_data: dict = {
+                            "slide_idx": slide_idx,
+                            "table_data_b64": base64.b64encode(
+                                json.dumps(table_data).encode()
+                            ).decode(),
+                        }
+                        if column_headers:
+                            form_data["column_headers_b64"] = base64.b64encode(
+                                json.dumps(column_headers).encode()
+                            ).decode()
+
+                        fill_r = API_SESSION.post(
+                            f"{BACKEND_URL}/fill-engine/fill-table",
+                            data=form_data,
+                            files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                            timeout=30,
+                        )
+                        fill_r.raise_for_status()
+                        st.session_state.pptx_bytes = base64.b64decode(
+                            fill_r.json()["pptx_base64"]
+                        )
+                        st.session_state.filled_slides.add(slide_idx)
+                        st.session_state.table_data_by_slide[slide_idx] = table_data
+                        # Cache headers so the chat refinement flow can show them
+                        if column_headers:
+                            st.session_state.setdefault("column_headers_by_slide", {})[
+                                slide_idx
+                            ] = column_headers
+                        st.success("Slide filled!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fill error: {e}")
+
+    st.divider()
+
+    # ── Agent Chat ─────────────────────────────────────────────────────────
+    st.subheader("Refine with AI")
+    user_msg = st.text_area(
+        "Describe adjustments (e.g., make Segment 1 more concise)",
+        key=f"chat_input_{slide_idx}",
+    )
+    if st.button("Apply Feedback", key=f"apply_{slide_idx}") and user_msg:
+        table_structure = slide_meta.get("table_structure")
+        current_data = st.session_state.table_data_by_slide.get(slide_idx)
+        if not table_structure or not current_data:
+            st.warning("Fill the slide first before refining.")
+        else:
+            with st.spinner("Applying feedback..."):
+                try:
+                    r = API_SESSION.post(
+                        f"{BACKEND_URL}/generation/chat",
+                        json={
+                            "slide_idx": slide_idx,
+                            "module": module,
+                            "current_content": current_data,
+                            "table_structure": table_structure,
+                            "user_message": user_msg,
+                        },
+                        timeout=60,
+                    )
+                    r.raise_for_status()
+                    updated = r.json().get("table_data", [])
+                    if updated and st.session_state.pptx_bytes:
+                        fill_r = API_SESSION.post(
+                            f"{BACKEND_URL}/fill-engine/fill-table",
+                            data={
+                                "slide_idx": slide_idx,
+                                "table_data_b64": base64.b64encode(
+                                    json.dumps(updated).encode()
+                                ).decode(),
+                            },
+                            files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                            timeout=30,
+                        )
+                        fill_r.raise_for_status()
+                        st.session_state.pptx_bytes = base64.b64decode(
+                            fill_r.json()["pptx_base64"]
+                        )
+                        st.session_state.table_data_by_slide[slide_idx] = updated
+                        st.success("Feedback applied!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Feedback failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module tab  (landing page + N slide pages)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_module_tab(module: str, slides: list):
+    """
+    Page layout within a module tab:
+      page 0          → Landing page (key questions + file upload)
+      page 1 .. N     → Slide fill pages
+    """
+    n_slides = len(slides)
+    # total pages = landing (1) + slides
+    total_pages = 1 + n_slides
+
+    cur = st.session_state.current_page_by_module[module]
+    cur = max(0, min(cur, total_pages - 1))
+    st.session_state.current_page_by_module[module] = cur
+
+    # ── Pagination bar ─────────────────────────────────────────────────────
+    pg_l, pg_mid, pg_r = st.columns([1, 5, 1])
+    with pg_l:
+        if st.button(
+            "← Back",
+            use_container_width=True,
+            key=f"prev_{module}_{cur}",
+            disabled=cur == 0,
+        ):
+            st.session_state.current_page_by_module[module] -= 1
+            st.rerun()
+    with pg_mid:
+        # Build indicator dots: 🏠 for landing, ● / ✓ / ○ for slides
+        dots = []
+        for i in range(total_pages):
+            if i == 0:
+                label = "🏠" if cur != 0 else "📍"
+            else:
+                s_idx = slides[i - 1]["idx"]
+                if i == cur:
+                    label = "●"
+                elif s_idx in st.session_state.filled_slides:
+                    label = "✓"
+                else:
+                    label = "○"
+            dots.append(label)
+        page_label = "Home" if cur == 0 else f"Slide {cur} / {n_slides}"
+        st.markdown(
+            f"<div style='text-align:center;font-size:1rem;letter-spacing:5px;"
+            f"color:#444;padding:4px 0'>{' '.join(dots)}</div>"
+            f"<div style='text-align:center;font-size:0.8rem;color:#888;margin-top:2px'>"
+            f"{page_label}</div>",
+            unsafe_allow_html=True,
+        )
+    with pg_r:
+        if st.button(
+            "Next →",
+            use_container_width=True,
+            key=f"next_{module}_{cur}",
+            disabled=cur == total_pages - 1,
+        ):
+            st.session_state.current_page_by_module[module] += 1
+            st.rerun()
+
+    st.divider()
+
+    # ── Page content ───────────────────────────────────────────────────────
+    if cur == 0:
+        render_landing_page(module, slides)
+    else:
+        slide_meta = slides[cur - 1]
+        slide_idx = slide_meta["idx"]
+        filled = slide_idx in st.session_state.filled_slides
+
+        # Slide page header
+        icon = MODULE_ICONS.get(module, "📋")
+        fill_badge = (
+            "<span style='background:#d4edda;color:#155724;border-radius:8px;"
+            "padding:2px 10px;font-size:0.8rem;margin-left:10px'>✅ Filled</span>"
+            if filled else ""
+        )
+        st.markdown(
+            f"<h3 style='margin-bottom:0.2rem'>{icon} {module} &mdash; Slide {cur}"
+            f"{fill_badge}</h3>",
+            unsafe_allow_html=True,
+        )
+
+        col_slide, col_ctrl = st.columns([3, 1])
+        with col_slide:
+            render_slide_panel(slide_meta)
+        with col_ctrl:
+            render_controls_panel(slide_meta, module)
+
+        # Download when all slides in module are done
+        all_filled = all(s["idx"] in st.session_state.filled_slides for s in slides)
+        if all_filled and st.session_state.pptx_bytes:
+            st.divider()
+            st.success(f"All {module} slides complete!")
+            st.download_button(
+                f"Download Deck",
+                data=st.session_state.pptx_bytes,
+                file_name="insight_forge_deck.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+                key=f"dl_{module}",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main():
     st.set_page_config(
         page_title="Insight Forge",
@@ -122,26 +723,39 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed",
     )
-
     init_session_state()
 
-    # Welcome page
+    # ── Welcome page ───────────────────────────────────────────────────────
     if not st.session_state.started:
         st.markdown(
             """
             <style>
             @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Source+Sans+3:wght@400;600&display=swap');
-            .title { font-family: 'Playfair Display', serif; font-size: 3.5rem; font-weight: 600; text-align: center; margin: 2rem 0; color: #1a1a2e; }
-            .desc { font-family: 'Source Sans 3', sans-serif; font-size: 1.2rem; text-align: center; color: #4a4a6a; max-width: 600px; margin: 0 auto 2rem; line-height: 1.6; }
-            .center { display: flex; justify-content: center; align-items: center; min-height: 40vh; }
+            .if-title { font-family:'Playfair Display',serif; font-size:3.5rem;
+                        font-weight:600; text-align:center; margin:2rem 0 0.5rem; color:#1a1a2e; }
+            .if-desc  { font-family:'Source Sans 3',sans-serif; font-size:1.15rem;
+                        text-align:center; color:#4a4a6a; max-width:640px;
+                        margin:0 auto 2.5rem; line-height:1.7; }
+            .if-modules { display:flex; justify-content:center; gap:2rem; margin-bottom:2.5rem; }
+            .if-mod-card { background:#f7f7fb; border:1px solid #e0e0f0; border-radius:14px;
+                           padding:1.4rem 2rem; text-align:center; min-width:220px; }
+            .if-mod-card .ic { font-size:2.2rem; }
+            .if-mod-card .lb { font-size:1rem; font-weight:600; color:#1a1a2e; margin-top:0.5rem; }
             </style>
-            <div class="title">Insight Forge</div>
-            <div class="desc">Use GenAI to fill your business plan slide deck. Upload support documents, answer key business questions, and let AI populate Customer Segmentation and Messaging Strategy modules.</div>
+            <div class="if-title">Insight Forge</div>
+            <div class="if-desc">
+                GenAI-powered business plan slide filling. Answer key business questions,
+                upload support documents, and let AI populate every module of your deck.
+            </div>
+            <div class="if-modules">
+                <div class="if-mod-card"><div class="ic">👥</div><div class="lb">Customer Segmentation</div></div>
+                <div class="if-mod-card"><div class="ic">💬</div><div class="lb">Messaging Strategy</div></div>
+            </div>
             """,
             unsafe_allow_html=True,
         )
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
+        _, col, _ = st.columns([1, 1, 1])
+        with col:
             if st.button("Start", type="primary", use_container_width=True):
                 st.session_state.started = True
                 st.session_state.slide_info = load_slide_info()
@@ -152,254 +766,66 @@ def main():
                 st.rerun()
         return
 
-    # Main flow
+    # ── Main app ───────────────────────────────────────────────────────────
     slide_info = st.session_state.slide_info
-    fillable_indices = st.session_state.fillable_indices
-    if not fillable_indices:
-        st.warning("No fillable slides found in template.")
+    if not slide_info:
+        st.warning("No slide info loaded.")
+        if st.button("Restart"):
+            st.session_state.started = False
+            st.rerun()
         return
 
-    current_idx = st.session_state.current_fillable_idx
-    slide_idx = fillable_indices[current_idx]
-    slide_meta = next((s for s in slide_info if s["idx"] == slide_idx), {})
-    module = slide_meta.get("module", "Unknown")
+    slides_by_module = get_slides_by_module(slide_info)
+    all_fillable = [s for sl in slides_by_module.values() for s in sl]
+    n_filled = sum(1 for s in all_fillable if s["idx"] in st.session_state.filled_slides)
+    n_total = len(all_fillable)
 
-    # Progress bar
-    total = len(fillable_indices)
-    progress = (current_idx + 1) / total
-    st.progress(progress, text=f"Slide {current_idx + 1} of {total}")
-
-    # Layout: 3/4 slide, 1/4 controls
-    col_slide, col_ctrl = st.columns([3, 1])
-
-    with col_slide:
-        pptx_bytes = st.session_state.pptx_bytes
-        if pptx_bytes:
-            deck_hash = hashlib.sha1(pptx_bytes).hexdigest()[:12]
-            cache_key = f"{slide_idx}:{deck_hash}"
-            png_cache = st.session_state.slide_png_cache
-            slide_png = png_cache.get(cache_key)
-            if slide_png is None:
-                slide_png = fetch_slide_png(slide_idx=slide_idx, pptx_bytes=pptx_bytes)
-                if slide_png:
-                    png_cache.clear()
-                    png_cache[cache_key] = slide_png
-
-            if slide_png:
-                st.image(slide_png, use_container_width=True)
-            else:
-                st.caption("PNG render unavailable, fallback to PPTX viewer.")
-                config = PptxViewerConfig(
-                    width=900,
-                    initial_slide=slide_idx,
-                    show_toolbar=True,
-                    show_slide_counter=True,
-                    enable_keyboard=True,
-                )
-                pptx_viewer(pptx_bytes, config=config, key=f"viewer_{slide_idx}")
-
-    with col_ctrl:
-        st.subheader("Support Files")
-        uploaded = st.file_uploader(
-            "Upload pptx or docx",
-            type=["pptx", "docx", "doc"],
-            accept_multiple_files=True,
+    # App header + overall progress
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&display=swap');
+        .if-header { font-family:'Playfair Display',serif; font-size:1.7rem;
+                     font-weight:600; color:#1a1a2e; margin-bottom:0.2rem; }
+        </style>
+        <div class="if-header">📊 Insight Forge</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if n_total > 0:
+        pct = int(100 * n_filled / n_total)
+        st.progress(
+            n_filled / n_total,
+            text=f"Overall: {n_filled}/{n_total} slides filled ({pct}%)",
         )
 
-        if uploaded:
-            if st.button("Ingest Files"):
-                with st.spinner("Ingesting..."):
-                    resp = API_SESSION.post(
-                        f"{BACKEND_URL}/retriever/ingest",
-                        files=[("files", (f.name, f.getvalue())) for f in uploaded],
-                        timeout=30,
-                    )
-                    if resp.ok:
-                        data = resp.json()
-                        st.session_state.file_ids = data.get("file_ids", [])
-                        st.session_state.key_question_answers = {}
-                        st.success(f"Ingested {len(st.session_state.file_ids)} file(s)")
-                        errors = data.get("errors", [])
-                        if errors:
-                            for err in errors:
-                                file_name = err.get("file", "unknown")
-                                message = err.get("error", "unknown error")
-                                st.warning(f"Ingest failed for {file_name}: {message}")
-                    else:
-                        st.error(resp.text)
+    st.divider()
 
-        st.subheader("Key Questions")
-        try:
-            r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=5)
-            if r.ok:
-                questions = r.json().get("questions", [])
-                for i, q in enumerate(questions, 1):
-                    st.caption(f"{i}. {q}")
+    # ── Module tabs ────────────────────────────────────────────────────────
+    tab_labels = []
+    for m in MODULES:
+        icon = MODULE_ICONS.get(m, "")
+        sl = slides_by_module[m]
+        done = sum(1 for s in sl if s["idx"] in st.session_state.filled_slides)
+        tab_labels.append(f"{icon} {m}  ({done}/{len(sl)})")
 
-                if st.session_state.file_ids:
-                    if st.button("Generate Key Question Answers", use_container_width=True):
-                        with st.spinner("Generating answers..."):
-                            try:
-                                ans_r = API_SESSION.post(
-                                    f"{BACKEND_URL}/generation/key-answers",
-                                    json={
-                                        "module": module,
-                                        "file_ids": st.session_state.file_ids,
-                                    },
-                                    timeout=90,
-                                )
-                                ans_r.raise_for_status()
-                                st.session_state.key_question_answers[module] = ans_r.json().get("answers", [])
-                            except Exception as e:
-                                st.error(f"Failed to generate answers: {e}")
+    tabs = st.tabs(tab_labels)
+    for tab, module in zip(tabs, MODULES):
+        with tab:
+            render_module_tab(module, slides_by_module[module])
 
-                    answers = st.session_state.key_question_answers.get(module, [])
-                    if answers:
-                        st.markdown("**LLM Answers**")
-                        for idx, item in enumerate(answers, 1):
-                            q = item.get("question", "")
-                            a = item.get("answer", "")
-                            with st.expander(f"Q{idx}: {q[:90]}"):
-                                st.write(a)
-                else:
-                    st.caption("Ingest support files to generate LLM answers.")
-            else:
-                st.caption("(Unable to load)")
-        except Exception:
-            st.caption("(Backend unavailable)")
-
-        if st.button("Fill Slide Template", type="primary", use_container_width=True):
-            if not st.session_state.file_ids:
-                st.warning("Upload and ingest support files first.")
-            else:
-                table_structure = slide_meta.get("table_structure")
-                if not table_structure:
-                    with st.spinner("Getting table structure..."):
-                        try:
-                            r = API_SESSION.post(
-                                f"{BACKEND_URL}/fill-engine/table-structure",
-                                data={"slide_idx": slide_idx, "path": TEMPLATE_PATH},
-                                timeout=10,
-                            )
-                            r.raise_for_status()
-                            table_structure = r.json()
-                        except Exception as e:
-                            st.error(f"Table structure: {e}")
-                            table_structure = None
-
-                if table_structure:
-                    with st.spinner("Generating content..."):
-                        try:
-                            fill_resp = API_SESSION.post(
-                                f"{BACKEND_URL}/generation/fill",
-                                json={
-                                    "slide_idx": slide_idx,
-                                    "module": module,
-                                    "file_ids": st.session_state.file_ids,
-                                    "table_structure": table_structure,
-                                },
-                                timeout=60,
-                            )
-                            fill_resp.raise_for_status()
-                            table_data = fill_resp.json().get("table_data", [])
-                        except Exception as e:
-                            st.error(f"Generation: {e}")
-                            table_data = []
-
-                    if table_data and st.session_state.pptx_bytes:
-                        try:
-                            fill_r = API_SESSION.post(
-                                f"{BACKEND_URL}/fill-engine/fill-table",
-                                data={
-                                    "slide_idx": slide_idx,
-                                    "table_data_b64": base64.b64encode(
-                                        json.dumps(table_data).encode()
-                                    ).decode(),
-                                },
-                                files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                                timeout=30,
-                            )
-                            fill_r.raise_for_status()
-                            new_bytes = base64.b64decode(fill_r.json()["pptx_base64"])
-                            st.session_state.pptx_bytes = new_bytes
-                            st.session_state.filled_slides.add(slide_idx)
-                            st.session_state.table_data_by_slide[slide_idx] = table_data
-                            st.success("Slide filled!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Fill: {e}")
-
-        st.subheader("Agent Chat")
-        user_msg = st.text_area("Adjustments (e.g., make Segment 1 more concise)")
-        if st.button("Apply Feedback") and user_msg:
-            table_structure = slide_meta.get("table_structure")
-            current_data = st.session_state.table_data_by_slide.get(slide_idx)
-            if not table_structure or not current_data:
-                st.warning("Fill the slide first, then use chat to refine.")
-            else:
-                with st.spinner("Applying feedback..."):
-                    try:
-                        r = API_SESSION.post(
-                            f"{BACKEND_URL}/generation/chat",
-                            json={
-                                "slide_idx": slide_idx,
-                                "module": module,
-                                "current_content": current_data,
-                                "table_structure": table_structure,
-                                "user_message": user_msg,
-                            },
-                            timeout=60,
-                        )
-                        r.raise_for_status()
-                        updated = r.json().get("table_data", [])
-                        if updated and st.session_state.pptx_bytes:
-                            fill_r = API_SESSION.post(
-                                f"{BACKEND_URL}/fill-engine/fill-table",
-                                data={
-                                    "slide_idx": slide_idx,
-                                    "table_data_b64": base64.b64encode(
-                                        json.dumps(updated).encode()
-                                    ).decode(),
-                                },
-                                files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                                timeout=30,
-                            )
-                            fill_r.raise_for_status()
-                            st.session_state.pptx_bytes = base64.b64decode(
-                                fill_r.json()["pptx_base64"]
-                            )
-                            st.session_state.table_data_by_slide[slide_idx] = updated
-                            st.success("Feedback applied!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Feedback failed: {e}")
-
+    # ── Final download ─────────────────────────────────────────────────────
+    if n_total > 0 and n_filled == n_total and st.session_state.pptx_bytes:
+        st.balloons()
         st.divider()
-
-        # Navigation
-        prev_col, next_col = st.columns(2)
-        with prev_col:
-            if st.button("Previous", use_container_width=True) and current_idx > 0:
-                st.session_state.current_fillable_idx -= 1
-                st.rerun()
-        with next_col:
-            if st.button("Next", use_container_width=True):
-                if current_idx < total - 1:
-                    st.session_state.current_fillable_idx += 1
-                    st.rerun()
-                else:
-                    st.balloons()
-                    st.success("All slides complete!")
-
-        # Download
-        if current_idx >= total - 1 and st.session_state.pptx_bytes:
-            st.download_button(
-                "Download Deck",
-                data=st.session_state.pptx_bytes,
-                file_name="insight_forge_deck.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True,
-            )
+        st.success("🎉 All modules complete!")
+        st.download_button(
+            "Download Complete Deck",
+            data=st.session_state.pptx_bytes,
+            file_name="insight_forge_deck.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
 
 
 if __name__ == "__main__":

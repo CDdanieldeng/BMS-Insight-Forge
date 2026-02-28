@@ -41,12 +41,22 @@ def _is_blank(text: str) -> bool:
     return not t or t in BLANK_PATTERNS
 
 
+def _normalize_text(text: str) -> str:
+    """
+    Collapse all whitespace variants (space, \n, \r, \t, \x0b, \x0c) into a
+    single space so that module names like 'Messaging\x0bStrategy' still match
+    'Messaging Strategy' as stored in MODULE_NAMES.
+    """
+    import re
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _get_slide_text(slide) -> str:
     """Extract all text from a slide for module detection."""
     parts = []
     for shape in slide.shapes:
         if hasattr(shape, "text") and shape.text:
-            parts.append(shape.text.strip())
+            parts.append(_normalize_text(shape.text))
     return " ".join(parts)
 
 
@@ -168,14 +178,16 @@ def fill_table(
     pptx_bytes: bytes,
     slide_idx: int,
     table_data: list[list[str]],
+    column_headers: list[str] | None = None,
 ) -> bytes:
     """
-    Fill table cells with table_data. table_data is 2D: rows x cols.
-    Row 0 of table = header (we don't overwrite); data starts at row 1.
-    Col 0 = row index (we don't overwrite); data starts at col 1.
+    Fill table cells with table_data and (optionally) replace column headers.
 
-    table_data[0] = first data row values (for cols 1, 2, 3, ...)
-    table_data[1] = second data row values, etc.
+    column_headers: real segment names that replace placeholder header cells
+                    (row 0, cols 1+).  Must match the number of data columns.
+    table_data:     2-D list of cell values.
+                    table_data[r] = values for data row r+1 (skips header).
+                    table_data[r][c] = value for col c+1 (skips index col).
     """
     prs = load_presentation(pptx_bytes=pptx_bytes)
     if slide_idx < 0 or slide_idx >= len(prs.slides):
@@ -188,12 +200,28 @@ def fill_table(
             num_rows = len(tbl.rows)
             num_cols = len(tbl.columns)
 
+            # ── Write column headers (row 0, cols 1+) ─────────────────────
+            if column_headers:
+                for c, header in enumerate(column_headers):
+                    col_idx = c + 1  # col 0 is the row-label corner
+                    if col_idx >= num_cols:
+                        break
+                    cell = tbl.cell(0, col_idx)
+                    cell.text = str(header).strip()
+                    logger.debug(
+                        "Set header cell (0,%d) = %r",
+                        col_idx,
+                        header,
+                        extra={"slide_idx": slide_idx},
+                    )
+
+            # ── Write data cells (rows 1+, cols 1+) ───────────────────────
             for r, row_data in enumerate(table_data):
-                data_row_idx = r + 1  # Skip header row
+                data_row_idx = r + 1  # skip header row
                 if data_row_idx >= num_rows:
                     break
                 for c, value in enumerate(row_data):
-                    data_col_idx = c + 1  # Skip index column
+                    data_col_idx = c + 1  # skip index column
                     if data_col_idx >= num_cols:
                         break
                     cell = tbl.cell(data_row_idx, data_col_idx)
@@ -210,9 +238,10 @@ def fill_table(
             prs.save(output)
             output.seek(0)
             logger.info(
-                "Filled table on slide %d with %d rows of data",
+                "Filled table on slide %d: %d data rows, column_headers=%s",
                 slide_idx,
                 len(table_data),
+                column_headers,
                 extra={"slide_idx": slide_idx},
             )
             return output.read()

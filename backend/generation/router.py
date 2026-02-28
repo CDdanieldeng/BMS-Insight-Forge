@@ -77,17 +77,22 @@ async def key_answers(req: KeyAnswersRequest) -> KeyAnswersResponse:
 @router.post("/fill")
 async def fill(req: FillRequest) -> dict[str, Any]:
     """
-    Orchestrate fill: enhance query -> retriever -> LLM generate table.
-    Returns table_data for frontend to pass to fill-engine.
+    Orchestrate fill: enhance query -> retriever -> (optionally) extract segment
+    names -> LLM generate table.
+
+    Returns:
+        table_data:     2-D array of cell values
+        column_headers: list of real segment names (replaces placeholder headers),
+                        or null if columns were not placeholders
     """
     try:
-        table_data = run_fill(
+        result = run_fill(
             slide_idx=req.slide_idx,
             module=req.module,
             file_ids=req.file_ids,
             table_structure=req.table_structure,
         )
-        return {"table_data": table_data}
+        return result  # {"table_data": [...], "column_headers": [...] | None}
     except Exception as e:
         logger.exception("Fill failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

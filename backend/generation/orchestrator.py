@@ -12,6 +12,19 @@ from generation.llm_client import complete
 
 logger = setup_logging("generation")
 
+# Matches placeholder column names like "Segment 1", "segment 3", "SEGMENT 4"
+_SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
+
+
+def _has_placeholder_columns(columns: list[str]) -> bool:
+    """
+    Return True if ALL non-empty column headers are generic placeholders
+    like 'Segment 1', 'Segment 2', etc. — meaning they need to be replaced
+    with real names extracted from the uploaded documents.
+    """
+    data_cols = [c.strip() for c in columns if c.strip()]
+    return bool(data_cols) and all(_SEGMENT_PLACEHOLDER_RE.match(c) for c in data_cols)
+
 # Lazy imports to avoid circular deps
 def _retriever_search(file_ids: list[str], query: str) -> str:
     from retriever.router import _store
@@ -74,23 +87,83 @@ Generate search query:"""
         return " ".join(questions[:2]) if questions else ""
 
 
+def extract_segment_names(
+    retriever_content: str,
+    n_segments: int,
+    module: str,
+) -> list[str]:
+    """
+    Use LLM to identify real customer segment names from uploaded documents.
+    Returns exactly n_segments names. Falls back to generic names if content
+    is insufficient.
+    """
+    system = f"""You are a business analyst specialising in customer segmentation.
+Identify the {n_segments} most distinct customer segments described in the provided content.
+Return ONLY a JSON array of {n_segments} short, specific segment name strings.
+Each name should be 2–5 words (e.g. "Community Oncologists", "Academic KOLs", "PCPs").
+If the content does not clearly describe segments, invent plausible placeholder names.
+Output ONLY valid JSON, no explanation."""
+
+    user = f"""Module: {module}
+Number of segments needed: {n_segments}
+
+Content from uploaded documents:
+{retriever_content[:10000]}
+
+Return a JSON array of exactly {n_segments} segment names:"""
+
+    try:
+        start = time.perf_counter()
+        raw = complete(system, user).strip()
+        if "```" in raw:
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+            if m:
+                raw = m.group(1)
+        names = json.loads(raw)
+        if not isinstance(names, list):
+            raise ValueError("Expected a JSON list")
+        # Ensure exactly n_segments entries
+        names = [str(n).strip() for n in names[:n_segments]]
+        while len(names) < n_segments:
+            names.append(f"Segment {len(names) + 1}")
+        logger.info(
+            "Segment extraction done module=%s n=%d names=%s elapsed_ms=%d",
+            module,
+            n_segments,
+            names,
+            int((time.perf_counter() - start) * 1000),
+        )
+        return names
+    except Exception as e:
+        logger.warning("Segment extraction failed, using fallbacks: %s", e)
+        return [f"Segment {i}" for i in range(1, n_segments + 1)]
+
+
 def generate_table_content(
     module: str,
     table_structure: dict[str, Any],
     retriever_content: str,
+    segment_names: list[str] | None = None,
 ) -> list[list[str]]:
     """
     Use LLM to generate table cell values from retriever content and table structure.
+    If segment_names is provided they replace placeholder column headers in the prompt
+    so the LLM generates content specific to each real segment.
     Returns 2D list: rows of cell values (excluding header row and index column).
     """
     questions = get_questions_for_module(module)
     columns = table_structure.get("columns", [])
     indexes = table_structure.get("indexes", [])
 
-    # Filter out empty column header
-    data_columns = [c for c in columns if c and c.strip()]
+    # Determine effective column labels for the LLM prompt
+    if segment_names:
+        effective_columns = [""] + segment_names  # col 0 is the row-label corner
+    else:
+        effective_columns = columns
+
+    data_columns = [c for c in effective_columns if c and c.strip()]
     if not data_columns:
-        data_columns = columns[1:] if len(columns) > 1 else columns
+        data_columns = effective_columns[1:] if len(effective_columns) > 1 else effective_columns
 
     system = """You are a business analyst. Fill the table based on the provided context and key business questions.
 Output a JSON array of arrays. Each inner array is one row of data (excluding the header row).
@@ -105,16 +178,16 @@ Key business questions for {module}:
 {chr(10).join(f'- {q}' for q in questions)}
 
 Table structure:
-- Column headers: {columns}
-- Row labels (indexes): {indexes}
+- Column headers (segments): {effective_columns}
+- Row labels (attributes): {indexes}
 
 Generate table data as JSON array of arrays. Example format: [["val1","val2"],["val1","val2"],...]
+Each inner array corresponds to one row label. Values correspond to each segment column.
 Number of rows = {len(indexes)}, number of values per row = {len(data_columns)}"""
 
     try:
         start = time.perf_counter()
         raw = complete(system, user)
-        # Extract JSON from response (handle markdown code blocks)
         raw = raw.strip()
         if "```" in raw:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
@@ -132,7 +205,6 @@ Number of rows = {len(indexes)}, number of values per row = {len(data_columns)}"
             else:
                 result.append([str(row)])
 
-        logger.info("Generated table with %d rows", len(result))
         logger.info(
             "Table generation done module=%s rows=%d data_cols=%d context_len=%d elapsed_ms=%d",
             module,
@@ -233,18 +305,28 @@ def run_fill(
     module: str,
     file_ids: list[str],
     table_structure: dict[str, Any],
-) -> list[list[str]]:
+) -> dict[str, Any]:
     """
-    Orchestrate: enhance query -> retriever -> generate table content.
+    Orchestrate: enhance query -> retriever -> (optionally) extract segments
+    -> generate table content.
+
+    Returns:
+        {
+          "table_data":     list[list[str]],   # cell values (no header, no index col)
+          "column_headers": list[str] | None,  # real segment names, or None if
+                                               # columns were not placeholders
+        }
     """
     start = time.perf_counter()
+    columns = table_structure.get("columns", [])
+    indexes = table_structure.get("indexes", [])
     logger.info(
         "run_fill start slide_idx=%d module=%s file_ids=%d table_rows=%d table_cols=%d",
         slide_idx,
         module,
         len(file_ids),
-        len(table_structure.get("indexes", [])),
-        len(table_structure.get("columns", [])),
+        len(indexes),
+        len(columns),
     )
 
     query = enhance_query(module, table_structure)
@@ -253,12 +335,32 @@ def run_fill(
     content = _retriever_search(file_ids, query)
     logger.info("Retriever returned %d chars", len(content))
 
-    table_data = generate_table_content(module, table_structure, content)
+    # ── Segment name extraction ────────────────────────────────────────────
+    # Column headers like "Segment 1", "Segment 2" are placeholders.
+    # Replace them with real names extracted from the uploaded documents.
+    segment_names: list[str] | None = None
+    placeholder_cols = [c.strip() for c in columns if c.strip()]
+
+    if _has_placeholder_columns(placeholder_cols):
+        n_segments = len(placeholder_cols)
+        logger.info(
+            "Placeholder columns detected (%d). Extracting real segment names.",
+            n_segments,
+        )
+        segment_names = extract_segment_names(content, n_segments, module)
+        logger.info("Extracted segment names: %s", segment_names)
+
+    # ── Table content generation ───────────────────────────────────────────
+    table_data = generate_table_content(
+        module, table_structure, content, segment_names=segment_names
+    )
+
     logger.info(
-        "run_fill done slide_idx=%d module=%s output_rows=%d elapsed_ms=%d",
+        "run_fill done slide_idx=%d module=%s output_rows=%d column_headers=%s elapsed_ms=%d",
         slide_idx,
         module,
         len(table_data),
+        segment_names,
         int((time.perf_counter() - start) * 1000),
     )
-    return table_data
+    return {"table_data": table_data, "column_headers": segment_names}
