@@ -72,9 +72,12 @@ def get_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-def complete(system_prompt: str, user_prompt: str) -> str:
+def complete(system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> str:
     """
     Call LLM with system and user prompts, return assistant message content.
+
+    max_tokens caps the output length, which prevents long-running generation
+    from exhausting the HTTP timeout. Pass None to use the model default.
     """
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     client = get_llm_client()
@@ -82,22 +85,27 @@ def complete(system_prompt: str, user_prompt: str) -> str:
     request_id = str(uuid.uuid4())[:8]
     start = time.perf_counter()
     logger.info(
-        "LLM call start id=%s provider=%s model=%s sys_len=%d user_len=%d",
+        "LLM call start id=%s provider=%s model=%s sys_len=%d user_len=%d max_tokens=%s",
         request_id,
         provider,
         model,
         len(system_prompt or ""),
         len(user_prompt or ""),
+        max_tokens,
     )
 
+    kwargs: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
+        response = client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         usage = getattr(response, "usage", None)
         prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None

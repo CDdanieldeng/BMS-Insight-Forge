@@ -175,7 +175,7 @@ def _ingest_and_answer(module: str, uploaded_files) -> bool:
         ans_r = API_SESSION.post(
             f"{BACKEND_URL}/generation/key-answers",
             json={"module": module, "file_ids": file_ids},
-            timeout=120,
+            timeout=200,
         )
         ans_r.raise_for_status()
         st.session_state.key_question_answers[module] = ans_r.json().get("answers", [])
@@ -375,7 +375,7 @@ def render_landing_page(module: str, slides: list):
                         ans_r = API_SESSION.post(
                             f"{BACKEND_URL}/generation/key-answers",
                             json={"module": module, "file_ids": module_fids},
-                            timeout=120,
+                            timeout=200,
                         )
                         ans_r.raise_for_status()
                         st.session_state.key_question_answers[module] = (
@@ -505,7 +505,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                                 "file_ids": module_fids,
                                 "table_structure": table_structure,
                             },
-                            timeout=90,
+                            timeout=200,
                         )
                         fill_resp.raise_for_status()
                         fill_result = fill_resp.json()
@@ -579,7 +579,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                             "table_structure": table_structure,
                             "user_message": user_msg,
                         },
-                        timeout=60,
+                        timeout=200,
                     )
                     r.raise_for_status()
                     updated = r.json().get("table_data", [])

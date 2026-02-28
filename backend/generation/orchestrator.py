@@ -15,6 +15,11 @@ logger = setup_logging("generation")
 # Matches placeholder column names like "Segment 1", "segment 3", "SEGMENT 4"
 _SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 
+# Module-level cache: module_name -> extracted segment names.
+# Populated on the first slide that triggers extraction; reused on subsequent
+# slides of the same module within the same backend session.
+_segment_name_cache: dict[str, list[str]] = {}
+
 
 def _has_placeholder_columns(columns: list[str]) -> bool:
     """
@@ -26,21 +31,25 @@ def _has_placeholder_columns(columns: list[str]) -> bool:
     return bool(data_cols) and all(_SEGMENT_PLACEHOLDER_RE.match(c) for c in data_cols)
 
 # Lazy imports to avoid circular deps
-def _retriever_search(file_ids: list[str], query: str) -> str:
-    from retriever.router import _store
+def _retriever_search(file_ids: list[str], query: str, top_k: int = 12) -> str:
+    from retriever.chunker import bm25_retrieve
+    from retriever.router import _chunk_store
     start = time.perf_counter()
-    texts = []
+    all_chunks: list[str] = []
     found = 0
     for fid in file_ids:
-        if fid in _store:
-            texts.append(_store[fid])
+        if fid in _chunk_store:
+            all_chunks.extend(_chunk_store[fid])
             found += 1
-    combined = "\n\n---\n\n".join(texts)
+    relevant = bm25_retrieve(all_chunks, query, top_k=top_k)
+    combined = "\n\n---\n\n".join(relevant)
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     logger.info(
-        "Retriever search done file_ids=%d found=%d query_len=%d content_len=%d elapsed_ms=%d",
+        "Retriever search done file_ids=%d found=%d total_chunks=%d returned=%d query_len=%d content_len=%d elapsed_ms=%d",
         len(file_ids),
         found,
+        len(all_chunks),
+        len(relevant),
         len(query or ""),
         len(combined),
         elapsed_ms,
@@ -70,7 +79,7 @@ Generate search query:"""
 
     try:
         start = time.perf_counter()
-        query = complete(system, user)
+        query = complete(system, user, max_tokens=120)
         result = query.strip().strip('"').strip("'")
         logger.info(
             "Enhance query done module=%s questions=%d columns=%d indexes=%d result_len=%d elapsed_ms=%d",
@@ -108,13 +117,13 @@ Output ONLY valid JSON, no explanation."""
 Number of segments needed: {n_segments}
 
 Content from uploaded documents:
-{retriever_content[:10000]}
+{retriever_content[:6000]}
 
 Return a JSON array of exactly {n_segments} segment names:"""
 
     try:
         start = time.perf_counter()
-        raw = complete(system, user).strip()
+        raw = complete(system, user, max_tokens=150).strip()
         if "```" in raw:
             m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
             if m:
@@ -172,7 +181,7 @@ Use concise, professional language. If context is insufficient, provide reasonab
 Output ONLY valid JSON, no markdown or explanation."""
 
     user = f"""Context from support documents:
-{retriever_content[:12000]}
+{retriever_content[:8000]}
 
 Key business questions for {module}:
 {chr(10).join(f'- {q}' for q in questions)}
@@ -183,11 +192,15 @@ Table structure:
 
 Generate table data as JSON array of arrays. Example format: [["val1","val2"],["val1","val2"],...]
 Each inner array corresponds to one row label. Values correspond to each segment column.
-Number of rows = {len(indexes)}, number of values per row = {len(data_columns)}"""
+Number of rows = {len(indexes)}, number of values per row = {len(data_columns)}
+IMPORTANT: Each cell value MUST be 18 words or fewer. Be concise and direct."""
+
+    # Cap output: ~60 tokens per cell × rows × cols, with a buffer
+    _max_out = min(3000, max(1500, len(indexes) * len(data_columns) * 80))
 
     try:
         start = time.perf_counter()
-        raw = complete(system, user)
+        raw = complete(system, user, max_tokens=_max_out)
         raw = raw.strip()
         if "```" in raw:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
@@ -248,12 +261,12 @@ Questions:
 {chr(10).join(f'- {q}' for q in questions)}
 
 Context:
-{content[:14000]}
+{content[:8000]}
 """
 
     try:
         start = time.perf_counter()
-        raw = complete(system, user).strip()
+        raw = complete(system, user, max_tokens=800).strip()
         if "```" in raw:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
             if match:
@@ -337,18 +350,33 @@ def run_fill(
 
     # ── Segment name extraction ────────────────────────────────────────────
     # Column headers like "Segment 1", "Segment 2" are placeholders.
-    # Replace them with real names extracted from the uploaded documents.
+    # The cache is checked first: the first slide of a module triggers LLM
+    # extraction; every subsequent slide of the same module reuses the result,
+    # keeping all slides consistent and saving one LLM call per extra slide.
     segment_names: list[str] | None = None
     placeholder_cols = [c.strip() for c in columns if c.strip()]
 
     if _has_placeholder_columns(placeholder_cols):
-        n_segments = len(placeholder_cols)
-        logger.info(
-            "Placeholder columns detected (%d). Extracting real segment names.",
-            n_segments,
-        )
-        segment_names = extract_segment_names(content, n_segments, module)
-        logger.info("Extracted segment names: %s", segment_names)
+        if module in _segment_name_cache:
+            segment_names = _segment_name_cache[module]
+            logger.info(
+                "Reusing cached segment names for module=%s: %s",
+                module,
+                segment_names,
+            )
+        else:
+            n_segments = len(placeholder_cols)
+            logger.info(
+                "Placeholder columns detected (%d). Extracting real segment names.",
+                n_segments,
+            )
+            segment_names = extract_segment_names(content, n_segments, module)
+            _segment_name_cache[module] = segment_names
+            logger.info(
+                "Extracted and cached segment names for module=%s: %s",
+                module,
+                segment_names,
+            )
 
     # ── Table content generation ───────────────────────────────────────────
     table_data = generate_table_content(

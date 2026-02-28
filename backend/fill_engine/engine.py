@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.util import Pt
 
 from shared.logging_config import setup_logging
 
@@ -174,6 +176,20 @@ def get_table_structure(
     raise ValueError(f"Slide {slide_idx} has no table")
 
 
+_FONT_BODY = "Trebuchet MS"
+_COLOR_BLACK = RGBColor(0, 0, 0)
+_COLOR_SEGMENT = RGBColor(190, 43, 187)
+
+
+def _apply_cell_font(cell, size_pt: int, color: RGBColor) -> None:
+    """Apply font name, size, and colour to every run in a cell's text frame."""
+    for para in cell.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.name = _FONT_BODY
+            run.font.size = Pt(size_pt)
+            run.font.color.rgb = color
+
+
 def fill_table(
     pptx_bytes: bytes,
     slide_idx: int,
@@ -208,6 +224,7 @@ def fill_table(
                         break
                     cell = tbl.cell(0, col_idx)
                     cell.text = str(header).strip()
+                    _apply_cell_font(cell, 16, _COLOR_SEGMENT)
                     logger.debug(
                         "Set header cell (0,%d) = %r",
                         col_idx,
@@ -226,6 +243,7 @@ def fill_table(
                         break
                     cell = tbl.cell(data_row_idx, data_col_idx)
                     cell.text = str(value).strip() if value else ""
+                    _apply_cell_font(cell, 12, _COLOR_BLACK)
                     logger.debug(
                         "Filled cell (%d,%d) with %r",
                         data_row_idx,
