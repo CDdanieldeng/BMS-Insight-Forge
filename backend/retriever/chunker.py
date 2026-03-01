@@ -22,6 +22,26 @@ _B = 0.75
 # Chunking
 # ---------------------------------------------------------------------------
 
+def is_low_information_block(block: str) -> bool:
+    """
+    Heuristic filter for noisy/low-value blocks before retrieval.
+    """
+    stripped = block.strip()
+    if len(stripped) < 40:
+        return True
+
+    non_ws_chars = [ch for ch in stripped if not ch.isspace()]
+    unique_non_ws = len(set(non_ws_chars))
+    if block.count("|") > 10 and unique_non_ws < 20:
+        return True
+
+    lowered = stripped.lower()
+    if "category" in lowered and "series" in lowered:
+        return True
+
+    return False
+
+
 def split_chunks(text: str, max_chars: int = _CHUNK_MAX) -> list[str]:
     """
     Split markdown text into chunks of at most max_chars characters.
@@ -38,7 +58,7 @@ def split_chunks(text: str, max_chars: int = _CHUNK_MAX) -> list[str]:
 
     for piece in raw:
         piece = piece.strip()
-        if not piece:
+        if not piece or is_low_information_block(piece):
             continue
 
         if len(current) + len(piece) + 2 <= max_chars:
@@ -55,16 +75,16 @@ def split_chunks(text: str, max_chars: int = _CHUNK_MAX) -> list[str]:
                     if len(buf) + len(s) + 1 <= max_chars:
                         buf = (buf + " " + s).strip() if buf else s
                     else:
-                        if buf:
+                        if buf and not is_low_information_block(buf):
                             chunks.append(buf)
                         buf = s
-                if buf:
+                if buf and not is_low_information_block(buf):
                     chunks.append(buf)
                 current = ""
             else:
                 current = piece
 
-    if current:
+    if current and not is_low_information_block(current):
         chunks.append(current)
 
     # Merge very small trailing fragments into the previous chunk
@@ -75,7 +95,7 @@ def split_chunks(text: str, max_chars: int = _CHUNK_MAX) -> list[str]:
         else:
             merged.append(chunk)
 
-    return [c for c in merged if c.strip()]
+    return [c for c in merged if c.strip() and not is_low_information_block(c)]
 
 
 # ---------------------------------------------------------------------------

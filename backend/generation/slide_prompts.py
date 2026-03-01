@@ -179,7 +179,6 @@ Do NOT report raw numbers.
    - Be concise and non-redundant.
    - Use neutral, objective, descriptive language.
    - Strictly reflect the extracted content only.
-   - Be 18 words or fewer.
 
 ------------------------------------------------------------
 

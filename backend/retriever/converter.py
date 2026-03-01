@@ -1,6 +1,6 @@
 """Convert pptx/docx to markdown using markitdown."""
 
-import io
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -11,6 +11,24 @@ logger = setup_logging("retriever")
 
 # Lazy import to avoid import error if markitdown not installed
 _markitdown = None
+
+# Each pattern has tailored flags. Avoid global DOTALL, which can accidentally
+# consume content across many slides.
+_NOISE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Allow bounded cross-line removal for long legal footer variants.
+    (
+        re.compile(
+            r"No part of it may be circulated[\s\S]{0,800}?approval of ZS\.",
+            flags=re.IGNORECASE,
+        ),
+        "",
+    ),
+    (re.compile(r"^\s*!\[\]\(Picture.*?\)\s*$", flags=re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^\s*Source:\s*ZS analysis.*$", flags=re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^\s*###\s*Notes:\s*$", flags=re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^\s*#\s*Contents\s*$", flags=re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"\bAppendix\b", flags=re.IGNORECASE), ""),
+]
 
 
 def _get_markitdown():
@@ -41,6 +59,17 @@ def _cleanup_temp_file(path: Path) -> None:
             time.sleep(0.2 * (i + 1))
 
 
+def clean_text(text: str) -> str:
+    """Remove known low-value boilerplate from extracted markdown/text."""
+    cleaned = text
+    for pattern, replacement in _NOISE_PATTERNS:
+        cleaned = pattern.sub(replacement, cleaned)
+
+    # Normalize excess blank lines after pattern-based deletions.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def convert_to_markdown(content: bytes, filename: str) -> str:
     """
     Convert uploaded file (pptx or docx) to markdown text.
@@ -65,7 +94,13 @@ def convert_to_markdown(content: bytes, filename: str) -> str:
             f.flush()
             result = md.convert(f.name)
             text = result.text_content if hasattr(result, "text_content") else str(result)
-            logger.info("Converted %s to markdown, %d chars", filename, len(text))
-            return text
+            cleaned_text = clean_text(text)
+            logger.info(
+                "Converted %s to markdown, raw=%d chars cleaned=%d chars",
+                filename,
+                len(text),
+                len(cleaned_text),
+            )
+            return cleaned_text
         finally:
             _cleanup_temp_file(temp_path)

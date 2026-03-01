@@ -1,8 +1,11 @@
 """Orchestrator: coordinates retriever, fill engine, and LLM."""
 
 import json
+import os
 import re
 import time
+import uuid
+from pathlib import Path
 from typing import Any
 
 from shared.logging_config import setup_logging
@@ -13,6 +16,13 @@ from generation.slide_prompts import get_prompt_builder
 
 logger = setup_logging("generation")
 
+_KEY_ANSWERS_TRACE_DIR = (
+    Path(__file__).resolve().parents[1] / "logs" / "key_question_llm"
+)
+_FILL_TRACE_DIR = (
+    Path(__file__).resolve().parents[1] / "logs" / "slide_fill_llm"
+)
+
 # Matches placeholder column names like "Segment 1", "segment 3", "SEGMENT 4"
 _SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 
@@ -20,6 +30,113 @@ _SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 # Populated on the first slide that triggers extraction; reused on subsequent
 # slides of the same module within the same backend session.
 _segment_name_cache: dict[str, list[str]] = {}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse a boolean-like environment variable with a safe default."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_retriever() -> bool:
+    """Whether to use BM25 retriever before LLM prompting."""
+    return _env_flag("USE_RETRIEVER", default=True)
+
+
+def _write_key_answers_trace_file(
+    module: str,
+    questions: list[str],
+    system_prompt: str,
+    user_prompt: str,
+    llm_raw_response: str,
+) -> None:
+    """
+    Persist key-question LLM trace to a text file for debugging/auditing.
+    Includes questions, full prompts, and raw model output.
+    """
+    try:
+        _KEY_ANSWERS_TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        module_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", (module or "").strip().lower()).strip("_")
+        if not module_slug:
+            module_slug = "module"
+        file_name = f"{time.strftime('%Y%m%d_%H%M%S')}_{module_slug}_{uuid.uuid4().hex[:8]}.txt"
+        file_path = _KEY_ANSWERS_TRACE_DIR / file_name
+
+        text = (
+            f"module: {module}\n"
+            f"time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"questions_count: {len(questions)}\n\n"
+            "=== KEY BUSINESS QUESTIONS ===\n"
+            + ("\n".join(f"- {q}" for q in questions) if questions else "(none)")
+            + "\n\n=== SYSTEM PROMPT ===\n"
+            + (system_prompt or "")
+            + "\n\n=== USER PROMPT ===\n"
+            + (user_prompt or "")
+            + "\n\n=== LLM RAW RESPONSE ===\n"
+            + (llm_raw_response or "")
+            + "\n"
+        )
+
+        file_path.write_text(text, encoding="utf-8")
+        logger.info("Key answers trace file written module=%s path=%s", module, file_path)
+    except Exception as e:
+        logger.warning("Failed to write key answers trace file module=%s err=%s", module, e)
+
+
+def _write_fill_trace_file(
+    *,
+    slide_idx: int,
+    module: str,
+    system_prompt: str,
+    user_prompt: str,
+    llm_raw_response: str,
+) -> None:
+    """
+    Persist fill trace for debugging LLM prompt/response.
+    """
+    try:
+        _FILL_TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        module_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", (module or "").strip().lower()).strip("_")
+        if not module_slug:
+            module_slug = "module"
+        file_name = (
+            f"{time.strftime('%Y%m%d_%H%M%S')}_{module_slug}_slide{slide_idx}_{uuid.uuid4().hex[:8]}.txt"
+        )
+        file_path = _FILL_TRACE_DIR / file_name
+
+        text = (
+            f"module: {module}\n"
+            f"slide_idx: {slide_idx}\n"
+            f"time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            "\n=== SYSTEM PROMPT ===\n"
+            + (system_prompt or "")
+            + "\n\n=== USER PROMPT ===\n"
+            + (user_prompt or "")
+            + "\n\n=== LLM RAW RESPONSE ===\n"
+            + (llm_raw_response or "")
+            + "\n"
+        )
+        file_path.write_text(text, encoding="utf-8")
+        logger.info(
+            "Fill trace file written module=%s slide_idx=%d path=%s",
+            module,
+            slide_idx,
+            file_path,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to write fill trace file module=%s slide_idx=%d err=%s",
+            module,
+            slide_idx,
+            e,
+        )
+
+
+def _should_write_fill_trace(slide_idx: int, module: str) -> bool:
+    """Only trace Customer Segmentation slide 1 unless explicitly expanded."""
+    return slide_idx == 1 and (module or "").strip().lower() == "customer segmentation"
 
 
 def _has_placeholder_columns(columns: list[str]) -> bool:
@@ -32,7 +149,7 @@ def _has_placeholder_columns(columns: list[str]) -> bool:
     return bool(data_cols) and all(_SEGMENT_PLACEHOLDER_RE.match(c) for c in data_cols)
 
 # Lazy imports to avoid circular deps
-def _retriever_search(file_ids: list[str], query: str, top_k: int = 16) -> str:
+def _retriever_search(file_ids: list[str], query: str, top_k: int = 50) -> str:
     from retriever.chunker import bm25_retrieve
     from retriever.router import _chunk_store
     start = time.perf_counter()
@@ -56,6 +173,44 @@ def _retriever_search(file_ids: list[str], query: str, top_k: int = 16) -> str:
         elapsed_ms,
     )
     return combined
+
+
+def _full_markdown_context(file_ids: list[str]) -> str:
+    """
+    Return full cleaned markdown for all file_ids in original upload order.
+    """
+    from retriever.router import _store
+
+    start = time.perf_counter()
+    texts: list[str] = []
+    found = 0
+    for fid in file_ids:
+        text = _store.get(fid)
+        if text:
+            texts.append(text.strip())
+            found += 1
+
+    combined = "\n\n---\n\n".join(t for t in texts if t)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    logger.info(
+        "Full markdown context done file_ids=%d found=%d content_len=%d elapsed_ms=%d",
+        len(file_ids),
+        found,
+        len(combined),
+        elapsed_ms,
+    )
+    return combined
+
+
+def _get_context_content(file_ids: list[str], query: str, top_k: int = 50) -> str:
+    """
+    Select context source based on USE_RETRIEVER toggle.
+    USE_RETRIEVER=true  -> BM25 top-k chunks (current default flow)
+    USE_RETRIEVER=false -> full cleaned markdown content
+    """
+    if _use_retriever():
+        return _retriever_search(file_ids, query, top_k=top_k)
+    return _full_markdown_context(file_ids)
 
 
 def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
@@ -154,6 +309,7 @@ def generate_table_content(
     table_structure: dict[str, Any],
     retriever_content: str,
     segment_names: list[str] | None = None,
+    trace_capture: dict[str, Any] | None = None,
 ) -> list[list[str]]:
     """
     Use LLM to generate table cell values from retriever content and table structure.
@@ -179,18 +335,23 @@ def generate_table_content(
     if not data_columns:
         data_columns = effective_columns[1:] if len(effective_columns) > 1 else effective_columns
 
+    retriever_chars_in_prompt = 0
+
     # ── Try slide-specific prompt builder ────────────────────────────────────
     prompt_builder = get_prompt_builder(module)
     if prompt_builder is not None:
         logger.info("Using slide-specific prompt for module=%s", module)
         system, user = prompt_builder(
-            retriever_content[:8000],
+            retriever_content,
             indexes,
             data_columns,
         )
+        retriever_chars_in_prompt = len(retriever_content or "")
     else:
         # ── Generic fallback prompt ───────────────────────────────────────────
         questions = get_questions_for_module(module)
+        context_for_prompt = retriever_content
+        retriever_chars_in_prompt = len(context_for_prompt)
         system = (
             "You are a business analyst. Fill the table based on the provided context "
             "and key business questions.\n"
@@ -202,7 +363,7 @@ def generate_table_content(
             "Output ONLY valid JSON, no markdown or explanation."
         )
         user = (
-            f"Context from support documents:\n{retriever_content[:8000]}\n\n"
+            f"Context from support documents:\n{context_for_prompt}\n\n"
             f"Key business questions for {module}:\n"
             + "\n".join(f"- {q}" for q in questions)
             + f"\n\nTable structure:\n"
@@ -214,16 +375,29 @@ def generate_table_content(
             "Values correspond to each segment column.\n"
             f"Number of rows = {len(indexes)}, "
             f"number of values per row = {len(data_columns)}\n"
-            "IMPORTANT: Each cell value MUST be 18 words or fewer. Be concise and direct."
+            "IMPORTANT: Be concise and direct."
         )
+
+    if trace_capture is not None:
+        trace_capture["system_prompt"] = system
+        trace_capture["user_prompt"] = user
 
     # Cap output: ~80 tokens per cell × rows × cols, with a buffer
     _max_out = min(4000, max(1500, len(indexes) * len(data_columns) * 80))
+    logger.info(
+        "LLM prompt context module=%s retriever_chars_in_prompt=%d retriever_total_chars=%d",
+        module,
+        retriever_chars_in_prompt,
+        len(retriever_content or ""),
+    )
 
     try:
         start = time.perf_counter()
-        raw = complete(system, user, max_tokens=_max_out)
-        raw = raw.strip()
+        raw_response = complete(system, user, max_tokens=_max_out)
+        if trace_capture is not None:
+            trace_capture["llm_raw_response"] = raw_response
+
+        raw = raw_response.strip()
         if "```" in raw:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
             if match:
@@ -264,12 +438,13 @@ def generate_key_question_answers(module: str, file_ids: list[str]) -> list[dict
         logger.info("Key answers skipped module=%s reason=no_questions", module)
         return []
 
-    content = _retriever_search(file_ids, query="; ".join(questions[:3]))
+    content = _get_context_content(file_ids, query="; ".join(questions[:3]))
     if not content:
         logger.info(
-            "Key answers fallback module=%s reason=no_retriever_content questions=%d",
+            "Key answers fallback module=%s reason=no_context_content questions=%d use_retriever=%s",
             module,
             len(questions),
+            _use_retriever(),
         )
         return [{"question": q, "answer": "No relevant content found in uploaded files."} for q in questions]
 
@@ -283,12 +458,26 @@ Questions:
 {chr(10).join(f'- {q}' for q in questions)}
 
 Context:
-{content[:8000]}
+{content}
 """
 
     try:
         start = time.perf_counter()
-        raw = complete(system, user, max_tokens=800).strip()
+        raw_response = complete(system, user, max_tokens=1600)
+        _write_key_answers_trace_file(
+            module=module,
+            questions=questions,
+            system_prompt=system,
+            user_prompt=user,
+            llm_raw_response=raw_response,
+        )
+        logger.info(
+            "Key answers LLM raw response module=%s response_len=%d response_text=%s",
+            module,
+            len(raw_response or ""),
+            (raw_response or "")[:4000],
+        )
+        raw = raw_response.strip()
         if "```" in raw:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
             if match:
@@ -364,11 +553,20 @@ def run_fill(
         len(columns),
     )
 
-    query = enhance_query(module, table_structure)
-    logger.info("Enhanced query: %s", query[:100])
+    use_retriever = _use_retriever()
+    if use_retriever:
+        query = enhance_query(module, table_structure)
+        logger.info("Enhanced query: %s", query[:100])
+    else:
+        query = ""
+        logger.info("Retriever disabled (USE_RETRIEVER=false), skipping query enhancement")
 
-    content = _retriever_search(file_ids, query)
-    logger.info("Retriever returned %d chars", len(content))
+    content = _get_context_content(file_ids, query)
+    logger.info(
+        "Context prepared chars=%d mode=%s",
+        len(content),
+        "retriever" if use_retriever else "full_markdown",
+    )
 
     # ── Segment name extraction ────────────────────────────────────────────
     # Column headers like "Segment 1", "Segment 2" are placeholders.
@@ -401,9 +599,23 @@ def run_fill(
             )
 
     # ── Table content generation ───────────────────────────────────────────
+    fill_trace: dict[str, Any] | None = {} if _should_write_fill_trace(slide_idx, module) else None
     table_data = generate_table_content(
-        module, table_structure, content, segment_names=segment_names
+        module,
+        table_structure,
+        content,
+        segment_names=segment_names,
+        trace_capture=fill_trace,
     )
+
+    if fill_trace is not None:
+        _write_fill_trace_file(
+            slide_idx=slide_idx,
+            module=module,
+            system_prompt=str(fill_trace.get("system_prompt", "")),
+            user_prompt=str(fill_trace.get("user_prompt", "")),
+            llm_raw_response=str(fill_trace.get("llm_raw_response", "")),
+        )
 
     logger.info(
         "run_fill done slide_idx=%d module=%s output_rows=%d column_headers=%s elapsed_ms=%d",

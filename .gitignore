@@ -22,3 +22,6 @@ Thumbs.db
 # Project
 *.pptx
 !example_files/*.pptx
+
+# logs
+backend/logs/
