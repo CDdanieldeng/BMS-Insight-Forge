@@ -93,14 +93,82 @@ _CS_SCHEMA_BY_LABEL: dict[str, str] = {
     for row in _CUSTOMER_SEGMENTATION_ROW_SCHEMA
 }
 
+_CS_SLIDE2_INDEXES = [
+    "segment summary",
+    "current behavior",
+    "desired behavior",
+    "segment prioritization",
+]
 
-def _customer_segmentation_prompts(
+_MESSAGING_STRATEGY_SLIDE1_INDEXES = [
+    "target/prioritized segment",
+    "drivers/barriers",
+    "desired behavior change",
+    "differentiated competitive benefit",
+    "reason to believe",
+    "business objective",
+]
+
+
+def _normalize_label(label: str) -> str:
+    return " ".join((label or "").strip().lower().split())
+
+
+def _customer_segmentation_slide2_prompts(
     content: str,
     indexes: list[str],
     segment_names: list[str],
 ) -> tuple[str, str]:
-    """Strict extraction prompt for the Customer Segmentation slide."""
+    """Focused prompt for Customer Segmentation slide 2."""
+    n_segments = len(segment_names)
+    n_rows = len(indexes)
+    segments_list = ", ".join(f'"{s}"' for s in segment_names)
 
+    system = f"""You are a commercial strategy analyst supporting a pharmaceutical brand team.
+
+Your task is to fill the slide-2 segment table using the provided segment names and source materials.
+The segment columns are already fixed (inherited from slide 1) and must remain consistent.
+
+ROW DEFINITIONS (SLIDE 2)
+- "Segment Summary": concise profile of the segment's core mindset and role.
+- "Current Behavior": explicitly stated current treatment or decision behaviors.
+- "Desired Behavior": target behavior change needed for this segment, grounded in source evidence.
+- "Segment Prioritization": assign High / Medium / Low priority with a brief evidence-based rationale.
+
+RULES
+1. Base statements on provided materials first; avoid unsupported claims.
+2. You may synthesize across multiple evidence points when writing "Desired Behavior" and "Segment Prioritization".
+3. Keep each cell concise (about 1-3 short bullet-like statements in one paragraph).
+4. If evidence is truly missing for a specific segment-row pair, return exactly:
+   "Not found in provided materials."
+5. Do not copy raw long quotes from source text.
+
+OUTPUT FORMAT
+- Return ONLY a valid JSON array of arrays.
+- Outer array order must exactly match: {indexes}
+- Inner array order must exactly match: {segment_names}
+- Total rows: {n_rows}
+- Values per row: {n_segments}
+- No markdown, no explanations, no extra keys."""
+
+    user = f"""Segments to populate (columns): {segments_list}
+
+Row labels to fill (in order): {indexes}
+
+Source materials:
+{content}
+
+Return the JSON array of arrays now:"""
+
+    return system, user
+
+
+def _customer_segmentation_strict_extraction_prompts(
+    content: str,
+    indexes: list[str],
+    segment_names: list[str],
+) -> tuple[str, str]:
+    """Strict extraction prompt for Customer Segmentation slides that need extraction-heavy rows."""
     n_segments = len(segment_names)
     n_rows = len(indexes)
 
@@ -219,12 +287,88 @@ Return the JSON array of arrays now:"""
     return system, user
 
 
+def _customer_segmentation_prompts(
+    content: str,
+    indexes: list[str],
+    segment_names: list[str],
+) -> tuple[str, str]:
+    """Route Customer Segmentation prompt by slide-unique row labels."""
+    normalized_indexes = [_normalize_label(i) for i in indexes]
+    if normalized_indexes == _CS_SLIDE2_INDEXES:
+        return _customer_segmentation_slide2_prompts(content, indexes, segment_names)
+    return _customer_segmentation_strict_extraction_prompts(content, indexes, segment_names)
+
+
+def _messaging_strategy_slide1_prompts(
+    content: str,
+    indexes: list[str],
+    segment_names: list[str],
+) -> tuple[str, str]:
+    """Focused prompt for Messaging Strategy slide 1."""
+    n_segments = len(segment_names)
+    n_rows = len(indexes)
+    segments_list = ", ".join(f'"{s}"' for s in segment_names)
+
+    system = f"""You are a commercial strategy analyst supporting a pharmaceutical brand team.
+
+Your task is to fill Messaging Strategy slide-1 table based on the provided segment names and source materials.
+Keep content practical, actionable, and aligned to evidence from the materials.
+
+ROW DEFINITIONS (MESSAGING STRATEGY - SLIDE 1)
+- "Target/Prioritized Segment": identify the segment this messaging strategy is for and why it should be prioritized.
+- "Drivers/Barriers": summarize key motivations and obstacles that influence behavior for this segment.
+- "Desired Behavior Change": specify the concrete behavior shift expected from this segment.
+- "Differentiated Competitive Benefit": state the brand benefit that is distinctive versus alternatives and most relevant to this segment.
+- "Reason to Believe": provide supporting proof points (e.g., evidence theme, clinical rationale, practical experience) that make the benefit credible.
+- "Business Objective": define the commercial objective this messaging strategy supports (e.g., adoption, share, initiation, switching, persistence).
+
+RULES
+1. Prioritize explicit evidence from source materials; use synthesis only when evidence points support it.
+2. Keep each cell concise (about 1-3 short bullet-like statements in one paragraph).
+3. Ensure each row answer is specific to the segment column and internally consistent across rows.
+4. If evidence is truly missing for a specific segment-row pair, return exactly:
+   "Not found in provided materials."
+5. Do not output long raw quotes from source text.
+
+OUTPUT FORMAT
+- Return ONLY a valid JSON array of arrays.
+- Outer array order must exactly match: {indexes}
+- Inner array order must exactly match: {segment_names}
+- Total rows: {n_rows}
+- Values per row: {n_segments}
+- No markdown, no explanations, no extra keys."""
+
+    user = f"""Segments to populate (columns): {segments_list}
+
+Row labels to fill (in order): {indexes}
+
+Source materials:
+{content}
+
+Return the JSON array of arrays now:"""
+
+    return system, user
+
+
+def _messaging_strategy_prompts(
+    content: str,
+    indexes: list[str],
+    segment_names: list[str],
+) -> tuple[str, str]:
+    """Route Messaging Strategy prompt by slide-unique row labels."""
+    normalized_indexes = [_normalize_label(i) for i in indexes]
+    if normalized_indexes == _MESSAGING_STRATEGY_SLIDE1_INDEXES:
+        return _messaging_strategy_slide1_prompts(content, indexes, segment_names)
+    return _messaging_strategy_slide1_prompts(content, indexes, segment_names)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Registry
 # ──────────────────────────────────────────────────────────────────────────────
 
 _REGISTRY: dict[str, PromptBuilder] = {
     "customer segmentation": _customer_segmentation_prompts,
+    "messaging strategy": _messaging_strategy_prompts,
 }
 
 

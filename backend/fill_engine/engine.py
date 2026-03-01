@@ -243,7 +243,7 @@ def fill_table(
                         break
                     cell = tbl.cell(data_row_idx, data_col_idx)
                     cell.text = str(value).strip() if value else ""
-                    _apply_cell_font(cell, 12, _COLOR_BLACK)
+                    _apply_cell_font(cell, 9, _COLOR_BLACK)
                     logger.debug(
                         "Filled cell (%d,%d) with %r",
                         data_row_idx,

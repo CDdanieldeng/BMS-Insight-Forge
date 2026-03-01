@@ -1,17 +1,16 @@
 """Insight Forge - Streamlit frontend for GenAI-powered business plan slide filling."""
 
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+import pandas as pd
 import requests
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import streamlit as st
-from st_pptx_viewer import pptx_viewer, PptxViewerConfig
 
 API_SESSION = requests.Session()
 API_SESSION.trust_env = False
@@ -21,7 +20,6 @@ TEMPLATE_PATH = os.getenv("TEMPLATE_PPTX_PATH", "/app/example_files/example slid
 
 # API timeouts (configurable via .env)
 TIMEOUT_QUICK = float(os.getenv("TIMEOUT_QUICK", "10"))
-TIMEOUT_RENDER_PNG = float(os.getenv("TIMEOUT_RENDER_PNG", "20"))
 TIMEOUT_KEY_QUESTIONS = float(os.getenv("TIMEOUT_KEY_QUESTIONS", "5"))
 TIMEOUT_INGEST = float(os.getenv("TIMEOUT_INGEST", "60"))
 TIMEOUT_LLM_GENERATION = float(os.getenv("TIMEOUT_LLM_GENERATION", "200"))
@@ -59,6 +57,7 @@ def init_session_state():
         "started": False,
         "slide_info": [],
         "fillable_indices": [],
+        "active_module": MODULES[0],
         # 0 = module landing page; 1..N = slide pages
         "current_page_by_module": {m: 0 for m in MODULES},
         "pptx_bytes": None,
@@ -66,7 +65,6 @@ def init_session_state():
         "file_ids_by_module": {m: [] for m in MODULES},
         "filled_slides": set(),
         "table_data_by_slide": {},
-        "slide_png_cache": {},
         "key_question_answers": {},
         "column_headers_by_slide": {},
     }
@@ -78,6 +76,12 @@ def init_session_state():
 def _module_file_ids(module: str) -> list[str]:
     """Return the ingested file_ids for the given module."""
     return st.session_state.file_ids_by_module.get(module, [])
+
+
+def _rerun_in_module(module: str):
+    """Rerun while explicitly preserving the currently active module."""
+    st.session_state.active_module = module
+    st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,25 +106,6 @@ def load_template_bytes() -> bytes | None:
     path = Path(TEMPLATE_PATH)
     return path.read_bytes() if path.exists() else None
 
-
-def fetch_slide_png(slide_idx: int, pptx_bytes: bytes | None = None) -> bytes | None:
-    try:
-        data = {"slide_idx": str(slide_idx)}
-        files = None
-        if pptx_bytes:
-            files = {"file": ("deck.pptx", pptx_bytes)}
-        else:
-            data["path"] = TEMPLATE_PATH
-        resp = API_SESSION.post(
-            f"{BACKEND_URL}/fill-engine/render-slide-png",
-            data=data,
-            files=files,
-            timeout=TIMEOUT_RENDER_PNG,
-        )
-        resp.raise_for_status()
-        return resp.content
-    except Exception:
-        return None
 
 
 def get_slides_by_module(slide_info: list) -> dict[str, list]:
@@ -368,7 +353,7 @@ def render_landing_page(module: str, slides: list):
                 ):
                     ok = _ingest_and_answer(module, uploaded)
                 if ok:
-                    st.rerun()
+                    _rerun_in_module(module)
 
         # Re-generate answers without re-uploading
         elif module_fids and not has_answers:
@@ -389,7 +374,7 @@ def render_landing_page(module: str, slides: list):
                         st.session_state.key_question_answers[module] = (
                             ans_r.json().get("answers", [])
                         )
-                        st.rerun()
+                        _rerun_in_module(module)
                     except Exception as e:
                         st.error(f"Failed: {e}")
 
@@ -407,42 +392,135 @@ def render_landing_page(module: str, slides: list):
                 disabled=not ready,
             ):
                 st.session_state.current_page_by_module[module] = 1
-                st.rerun()
+                _rerun_in_module(module)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Slide page  (page index = 1..N)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_slide_panel(slide_meta: dict):
+def render_slide_content(slide_meta: dict):
     slide_idx = slide_meta["idx"]
-    pptx_bytes = st.session_state.pptx_bytes
-    if not pptx_bytes:
-        st.warning("No PPTX loaded.")
-        return
+    filled = slide_idx in st.session_state.filled_slides
+    table_structure = slide_meta.get("table_structure", {})
+    row_labels = table_structure.get("indexes", [])
+    template_col_names = table_structure.get("columns", [])[1:]  # skip corner cell
 
-    deck_hash = hashlib.sha1(pptx_bytes).hexdigest()[:12]
-    cache_key = f"{slide_idx}:{deck_hash}"
-    png_cache = st.session_state.slide_png_cache
-    slide_png = png_cache.get(cache_key)
-    if slide_png is None:
-        slide_png = fetch_slide_png(slide_idx=slide_idx, pptx_bytes=pptx_bytes)
-        if slide_png:
-            png_cache.clear()
-            png_cache[cache_key] = slide_png
+    if filled:
+        table_data = st.session_state.table_data_by_slide.get(slide_idx, [])
+        col_headers = st.session_state.column_headers_by_slide.get(slide_idx)
 
-    if slide_png:
-        st.image(slide_png, use_container_width=True)
+        # Normalize ragged/misaligned LLM output so dataframe construction
+        # never fails when row/column counts differ from template metadata.
+        normalized_rows = [list(r) for r in table_data if isinstance(r, list)]
+        n_data_rows = len(normalized_rows)
+        n_data_cols = max((len(r) for r in normalized_rows), default=len(template_col_names))
+        n_data_cols = max(1, n_data_cols)
+
+        # Pad/truncate each data row to a consistent width.
+        normalized_rows = [r[:n_data_cols] + [""] * (n_data_cols - len(r)) for r in normalized_rows]
+
+        # Build robust column names: prefer LLM-detected headers only when shape matches.
+        if col_headers and len(col_headers) == n_data_cols:
+            col_names = col_headers
+        else:
+            base_cols = template_col_names[:n_data_cols]
+            if len(base_cols) < n_data_cols:
+                base_cols += [f"Column {i + 1}" for i in range(len(base_cols), n_data_cols)]
+            col_names = base_cols
+
+        # Build robust row labels: trim or pad template index labels to match data rows.
+        if row_labels:
+            idx_names = row_labels[:n_data_rows]
+            if len(idx_names) < n_data_rows:
+                idx_names += [f"Row {i + 1}" for i in range(len(idx_names), n_data_rows)]
+        else:
+            idx_names = [f"Row {i + 1}" for i in range(n_data_rows)]
+
+        if normalized_rows:
+            df = pd.DataFrame(normalized_rows, index=idx_names, columns=col_names)
+        else:
+            # Filled state but no rows returned: show table skeleton instead of crashing.
+            fallback_rows = row_labels if row_labels else ["(no rows)"]
+            fallback_cols = template_col_names if template_col_names else ["(no columns)"]
+            df = pd.DataFrame("", index=fallback_rows, columns=fallback_cols)
     else:
-        st.caption("PNG render unavailable — falling back to PPTX viewer.")
-        config = PptxViewerConfig(
-            width=900,
-            initial_slide=slide_idx,
-            show_toolbar=True,
-            show_slide_counter=True,
-            enable_keyboard=True,
+        # Show empty template structure so users can see what will be filled
+        df = pd.DataFrame(
+            "",
+            index=row_labels,
+            columns=template_col_names if template_col_names else ["(fill to see columns)"],
         )
-        pptx_viewer(pptx_bytes, config=config, key=f"viewer_{slide_idx}")
+
+    # Render as HTML so text wraps inside cells (vertical growth) instead of
+    # forcing horizontal scrolling like the interactive grid.
+    styler = (
+        df.style
+        .set_properties(**{
+            "white-space": "pre-wrap",
+            "word-break": "break-word",
+            "text-align": "left",
+            "vertical-align": "top",
+        })
+        .set_table_styles([
+            {
+                "selector": "table",
+                "props": [
+                    ("table-layout", "fixed"),
+                    ("width", "100%"),
+                    ("border-collapse", "collapse"),
+                ],
+            },
+            {
+                "selector": "thead th",
+                "props": [
+                    ("background-color", "#1B3A5C"),
+                    ("color", "white"),
+                    ("font-weight", "bold"),
+                    ("font-size", "12px"),
+                    ("line-height", "1.3"),
+                    ("padding", "8px"),
+                    ("border", "1px solid #D7DEEA"),
+                ],
+            },
+            {
+                "selector": "th.row_heading",
+                "props": [
+                    ("background-color", "#E8EDF2"),
+                    ("color", "#1B3A5C"),
+                    ("font-weight", "bold"),
+                    ("text-align", "left"),
+                    ("font-size", "12px"),
+                    ("line-height", "1.35"),
+                    ("width", "220px"),
+                    ("min-width", "220px"),
+                    ("padding", "8px"),
+                    ("border", "1px solid #D7DEEA"),
+                ],
+            },
+            {
+                "selector": "td",
+                "props": [
+                    ("width", "180px"),
+                    ("min-width", "180px"),
+                    ("max-width", "220px"),
+                    ("font-size", "9px"),
+                    ("line-height", "1.35"),
+                    ("padding", "8px"),
+                    ("border", "1px solid #D7DEEA"),
+                ],
+            },
+        ])
+    )
+    st.markdown(
+        "<div style='max-height:520px; overflow-y:auto; overflow-x:auto;'>"
+        f"{styler.to_html()}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not filled:
+        st.caption("Fill this slide to populate the table.")
 
 
 def render_controls_panel(slide_meta: dict, module: str):
@@ -474,7 +552,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                         f"Ingested {len(st.session_state.file_ids_by_module[module])} file(s). "
                         "Re-fill the slide to use the new documents."
                     )
-                    st.rerun()
+                    _rerun_in_module(module)
 
     st.divider()
 
@@ -558,7 +636,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                                 slide_idx
                             ] = column_headers
                         st.success("Slide filled!")
-                        st.rerun()
+                        _rerun_in_module(module)
                     except Exception as e:
                         st.error(f"Fill error: {e}")
 
@@ -609,7 +687,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                         )
                         st.session_state.table_data_by_slide[slide_idx] = updated
                         st.success("Feedback applied!")
-                        st.rerun()
+                        _rerun_in_module(module)
                 except Exception as e:
                     st.error(f"Feedback failed: {e}")
 
@@ -642,7 +720,7 @@ def render_module_tab(module: str, slides: list):
             disabled=cur == 0,
         ):
             st.session_state.current_page_by_module[module] -= 1
-            st.rerun()
+            _rerun_in_module(module)
     with pg_mid:
         # Build indicator dots: 🏠 for landing, ● / ✓ / ○ for slides
         dots = []
@@ -674,7 +752,7 @@ def render_module_tab(module: str, slides: list):
             disabled=cur == total_pages - 1,
         ):
             st.session_state.current_page_by_module[module] += 1
-            st.rerun()
+            _rerun_in_module(module)
 
     st.divider()
 
@@ -701,7 +779,7 @@ def render_module_tab(module: str, slides: list):
 
         col_slide, col_ctrl = st.columns([3, 1])
         with col_slide:
-            render_slide_panel(slide_meta)
+            render_slide_content(slide_meta)
         with col_ctrl:
             render_controls_panel(slide_meta, module)
 
@@ -809,18 +887,25 @@ def main():
 
     st.divider()
 
-    # ── Module tabs ────────────────────────────────────────────────────────
-    tab_labels = []
+    # ── Module selector (persists across reruns) ───────────────────────────
+    done_by_module: dict[str, int] = {}
     for m in MODULES:
-        icon = MODULE_ICONS.get(m, "")
         sl = slides_by_module[m]
-        done = sum(1 for s in sl if s["idx"] in st.session_state.filled_slides)
-        tab_labels.append(f"{icon} {m}  ({done}/{len(sl)})")
+        done_by_module[m] = sum(1 for s in sl if s["idx"] in st.session_state.filled_slides)
 
-    tabs = st.tabs(tab_labels)
-    for tab, module in zip(tabs, MODULES):
-        with tab:
-            render_module_tab(module, slides_by_module[module])
+    default_idx = MODULES.index(st.session_state.active_module) if st.session_state.active_module in MODULES else 0
+    active_module = st.radio(
+        "Module",
+        options=MODULES,
+        index=default_idx,
+        horizontal=True,
+        format_func=lambda m: (
+            f"{MODULE_ICONS.get(m, '')} {m} ({done_by_module[m]}/{len(slides_by_module[m])})"
+        ),
+    )
+    st.session_state.active_module = active_module
+
+    render_module_tab(active_module, slides_by_module[active_module])
 
     # ── Final download ─────────────────────────────────────────────────────
     if n_total > 0 and n_filled == n_total and st.session_state.pptx_bytes:
