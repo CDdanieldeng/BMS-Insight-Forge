@@ -31,6 +31,19 @@ _SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 # slides of the same module within the same backend session.
 _segment_name_cache: dict[str, list[str]] = {}
 
+# Module-level cache: slide_idx -> generated table metadata.
+# Used to provide prior slide table outputs as context for downstream slides.
+_slide_table_cache: dict[int, dict[str, Any]] = {}
+
+_MESSAGING_STRATEGY_SLIDE3_INDEXES = [
+    "target/prioritized segment",
+    "drivers/barriers",
+    "desired behavior change",
+    "differentiated competitive benefit",
+    "reason to believe",
+    "business objective",
+]
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     """Parse a boolean-like environment variable with a safe default."""
@@ -147,6 +160,82 @@ def _has_placeholder_columns(columns: list[str]) -> bool:
     """
     data_cols = [c.strip() for c in columns if c.strip()]
     return bool(data_cols) and all(_SEGMENT_PLACEHOLDER_RE.match(c) for c in data_cols)
+
+
+def _normalize_label(label: str) -> str:
+    return " ".join((label or "").strip().lower().split())
+
+
+def _is_messaging_strategy_slide3(module: str, indexes: list[str]) -> bool:
+    if _normalize_label(module) != "messaging strategy":
+        return False
+    return [_normalize_label(i) for i in indexes] == _MESSAGING_STRATEGY_SLIDE3_INDEXES
+
+
+def _format_cached_table_context(cached: dict[str, Any]) -> str:
+    slide_idx = int(cached.get("slide_idx", -1))
+    module = str(cached.get("module", ""))
+    headers = [str(h) for h in (cached.get("column_headers") or [])]
+    indexes = [str(i) for i in (cached.get("indexes") or [])]
+    table_data = cached.get("table_data") or []
+
+    lines: list[str] = [
+        f"Slide {slide_idx} ({module})",
+        f"Columns: {headers}",
+    ]
+    for row_idx, row_label in enumerate(indexes):
+        row_values = table_data[row_idx] if row_idx < len(table_data) else []
+        lines.append(f'- {row_label}: {row_values}')
+    return "\n".join(lines)
+
+
+def _build_prior_table_primary_context(current_slide_idx: int) -> str:
+    """Return formatted context from the two latest slides before current slide."""
+    prior_slides = sorted(idx for idx in _slide_table_cache if idx < current_slide_idx)[-2:]
+    if not prior_slides:
+        return ""
+    return "\n\n".join(_format_cached_table_context(_slide_table_cache[idx]) for idx in prior_slides)
+
+
+def _is_high_priority(value: str) -> bool:
+    return bool(re.match(r"^\s*high\b", (value or "").strip(), flags=re.IGNORECASE))
+
+
+def _extract_prioritized_segments_from_customer_segmentation(
+    current_slide_idx: int,
+) -> list[str]:
+    """
+    Extract prioritized segment names from the latest prior customer segmentation
+    slide that contains a 'Segment Prioritization' row.
+    """
+    candidate_slides = sorted(idx for idx in _slide_table_cache if idx < current_slide_idx)
+    for idx in reversed(candidate_slides):
+        cached = _slide_table_cache[idx]
+        if _normalize_label(str(cached.get("module", ""))) != "customer segmentation":
+            continue
+
+        headers = [str(h).strip() for h in (cached.get("column_headers") or []) if str(h).strip()]
+        row_labels = [str(r).strip() for r in (cached.get("indexes") or [])]
+        table_data = cached.get("table_data") or []
+        normalized_rows = [_normalize_label(r) for r in row_labels]
+        if "segment prioritization" not in normalized_rows:
+            continue
+
+        row_idx = normalized_rows.index("segment prioritization")
+        if row_idx >= len(table_data):
+            continue
+        row_values = table_data[row_idx] or []
+
+        prioritized: list[str] = []
+        for col_idx, cell in enumerate(row_values):
+            if not _is_high_priority(str(cell)):
+                continue
+            if col_idx < len(headers):
+                prioritized.append(headers[col_idx])
+
+        if prioritized:
+            return prioritized
+    return []
 
 # Lazy imports to avoid circular deps
 def _retriever_search(file_ids: list[str], query: str, top_k: int = 50) -> str:
@@ -597,8 +686,9 @@ def run_fill(
     # keeping all slides consistent and saving one LLM call per extra slide.
     segment_names: list[str] | None = None
     placeholder_cols = [c.strip() for c in columns if c.strip()]
+    is_ms_slide3 = _is_messaging_strategy_slide3(module, indexes)
 
-    if _has_placeholder_columns(placeholder_cols):
+    if _has_placeholder_columns(placeholder_cols) and not is_ms_slide3:
         if module in _segment_name_cache:
             segment_names = _segment_name_cache[module]
             logger.info(
@@ -620,6 +710,36 @@ def run_fill(
                 segment_names,
             )
 
+    # ── Context composition for Messaging Strategy slide 3 ───────────────────
+    if is_ms_slide3:
+        prior_table_context = _build_prior_table_primary_context(slide_idx)
+        uploaded_materials_context = content
+        if prior_table_context:
+            content = (
+                "PRIMARY INPUT: PREVIOUS CUSTOMER SEGMENTATION TABLES\n"
+                f"{prior_table_context}\n\n"
+                "SECONDARY INPUT: UPLOADED MATERIALS\n"
+                f"{uploaded_materials_context}"
+            )
+            logger.info(
+                "Messaging Strategy slide3 context merged with prior tables slide_idx=%d prior_chars=%d uploaded_chars=%d merged_chars=%d",
+                slide_idx,
+                len(prior_table_context),
+                len(uploaded_materials_context),
+                len(content),
+            )
+        else:
+            content = (
+                "PRIMARY INPUT: PREVIOUS CUSTOMER SEGMENTATION TABLES\n"
+                "(none)\n\n"
+                "SECONDARY INPUT: UPLOADED MATERIALS\n"
+                f"{uploaded_materials_context}"
+            )
+            logger.info(
+                "Messaging Strategy slide3 has no prior table cache slide_idx=%d; using uploaded materials as fallback",
+                slide_idx,
+            )
+
     # ── Table content generation ───────────────────────────────────────────
     fill_trace: dict[str, Any] | None = {} if _should_write_fill_trace(slide_idx, module) else None
     table_data = generate_table_content(
@@ -629,6 +749,33 @@ def run_fill(
         segment_names=segment_names,
         trace_capture=fill_trace,
     )
+
+    # ── Hard post-process for Messaging Strategy slide 3 ───────────────────
+    # Keep original placeholder headers and force row-1 to prioritized segment names.
+    if is_ms_slide3:
+        prioritized_segments = _extract_prioritized_segments_from_customer_segmentation(slide_idx)
+        normalized_indexes = [_normalize_label(i) for i in indexes]
+        if "target/prioritized segment" in normalized_indexes and table_data:
+            target_row_idx = normalized_indexes.index("target/prioritized segment")
+            if target_row_idx < len(table_data):
+                col_count = len(table_data[target_row_idx])
+                if col_count > 0:
+                    if prioritized_segments:
+                        repeated = [
+                            prioritized_segments[i % len(prioritized_segments)]
+                            for i in range(col_count)
+                        ]
+                        table_data[target_row_idx] = repeated
+                        logger.info(
+                            "Messaging Strategy slide3 prioritized segments applied slide_idx=%d segments=%s",
+                            slide_idx,
+                            prioritized_segments,
+                        )
+                    else:
+                        logger.info(
+                            "Messaging Strategy slide3 prioritized segments unavailable slide_idx=%d; keeping model output",
+                            slide_idx,
+                        )
 
     if fill_trace is not None:
         _write_fill_trace_file(
@@ -647,4 +794,17 @@ def run_fill(
         segment_names,
         int((time.perf_counter() - start) * 1000),
     )
-    return {"table_data": table_data, "column_headers": segment_names}
+
+    # Cache current slide output for downstream slide context composition.
+    effective_headers = segment_names or [c.strip() for c in columns if c.strip()]
+    _slide_table_cache[slide_idx] = {
+        "slide_idx": slide_idx,
+        "module": module,
+        "column_headers": effective_headers,
+        "indexes": indexes,
+        "table_data": table_data,
+    }
+
+    # For Messaging Strategy slide 3, preserve original PPT placeholder headers.
+    response_headers = None if is_ms_slide3 else segment_names
+    return {"table_data": table_data, "column_headers": response_headers}

@@ -355,36 +355,52 @@ def _customer_segmentation_prompts(
     return _customer_segmentation_strict_extraction_prompts(content, indexes, segment_names)
 
 
-def _messaging_strategy_slide1_prompts(
+def _messaging_strategy_slide3_prompts(
     content: str,
     indexes: list[str],
     segment_names: list[str],
 ) -> tuple[str, str]:
-    """Focused prompt for Messaging Strategy slide 1."""
+    """Focused prompt for Messaging Strategy slide 3 (Messaging Strategy)."""
     n_segments = len(segment_names)
     n_rows = len(indexes)
     segments_list = ", ".join(f'"{s}"' for s in segment_names)
 
     system = f"""You are a commercial strategy analyst supporting a pharmaceutical brand team.
 
-Your task is to fill Messaging Strategy slide-1 table based on the provided segment names and source materials.
-Keep content practical, actionable, and aligned to evidence from the materials.
+Your task is to fill Messaging Strategy slide-3 table based on the provided segment names and source inputs.
+Keep content practical, actionable, and strictly evidence-led.
 
-ROW DEFINITIONS (MESSAGING STRATEGY - SLIDE 1)
-- "Target/Prioritized Segment": identify the segment this messaging strategy is for and why it should be prioritized.
-- "Drivers/Barriers": summarize key motivations and obstacles that influence behavior for this segment.
-- "Desired Behavior Change": specify the concrete behavior shift expected from this segment.
-- "Differentiated Competitive Benefit": state the brand benefit that is distinctive versus alternatives and most relevant to this segment.
+SOURCE PRIORITY (MANDATORY)
+The user prompt includes two sections:
+1) PRIMARY INPUT: PREVIOUS CUSTOMER SEGMENTATION TABLES
+2) SECONDARY INPUT: UPLOADED MATERIALS
+
+You MUST fill each cell using PRIMARY INPUT first.
+Only when the needed content cannot be found in PRIMARY INPUT for that row/segment, you may use SECONDARY INPUT.
+If neither source has evidence, return exactly:
+"Not found in provided materials."
+
+ROW DEFINITIONS (MESSAGING STRATEGY - SLIDE 3)
+- "Target/Prioritized Segment": use prioritized segment name(s) from Customer Segmentation "Segment Prioritization" entries marked as "High". If multiple are "High", list those names in column order.
+- "Drivers/Barriers": summarize the core motivation and resistance factors for that segment, primarily grounded in previous slide tables.
+- "Desired Behavior Change": specify the concrete behavior shift expected from the same-column "Target/Prioritized Segment". It must explicitly describe what that prioritized segment should do differently. IMPORTANT: this row must be consistent across all segment columns (same core statement).
+- "Differentiated Competitive Benefit": state the brand benefit that is distinctive versus alternatives. IMPORTANT: this row must be consistent across all segment columns (same core statement).
 - "Reason to Believe": provide supporting proof points (e.g., evidence theme, clinical rationale, practical experience) that make the benefit credible.
-- "Business Objective": define the commercial objective this messaging strategy supports (e.g., adoption, share, initiation, switching, persistence).
+- "Business Objective": define the commercial objective this messaging strategy supports based on the same-column "Target/Prioritized Segment". It must be explicitly linked to winning behavior change in that prioritized segment (e.g., adoption, share, initiation, switching, persistence).
 
 RULES
-1. Prioritize explicit evidence from source materials; use synthesis only when evidence points support it.
+1. Prioritize explicit evidence; keep synthesis conservative and traceable to evidence.
 2. Keep each cell concise (about 1-3 short bullet-like statements in one paragraph).
-3. Ensure each row answer is specific to the segment column and internally consistent across rows.
-4. If evidence is truly missing for a specific segment-row pair, return exactly:
+3. Ensure internal consistency across rows per segment.
+4. Column headers are fixed template placeholders (e.g., "Segment 1", "Segment 2"); do not reinterpret them as extracted segment names.
+5. For "Desired Behavior Change" and "Differentiated Competitive Benefit":
+   - Use one shared statement for all segment columns.
+   - Minor wording changes are allowed only for fluency, not for changing meaning.
+6. "Desired Behavior Change" must be consistent with the same-column "Target/Prioritized Segment" and cannot be a generic statement detached from target segment context.
+7. "Business Objective" must be consistent with the same-column "Target/Prioritized Segment" and cannot be a generic brand-level statement detached from target segment context.
+8. If evidence is truly missing for a specific segment-row pair, return exactly:
    "Not found in provided materials."
-5. Do not output long raw quotes from source text.
+9. Do not output long raw quotes from source text.
 
 OUTPUT FORMAT
 - Return ONLY a valid JSON array of arrays.
@@ -414,8 +430,8 @@ def _messaging_strategy_prompts(
     """Route Messaging Strategy prompt by slide-unique row labels."""
     normalized_indexes = [_normalize_label(i) for i in indexes]
     if normalized_indexes == _MESSAGING_STRATEGY_SLIDE1_INDEXES:
-        return _messaging_strategy_slide1_prompts(content, indexes, segment_names)
-    return _messaging_strategy_slide1_prompts(content, indexes, segment_names)
+        return _messaging_strategy_slide3_prompts(content, indexes, segment_names)
+    return _messaging_strategy_slide3_prompts(content, indexes, segment_names)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
