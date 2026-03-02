@@ -135,8 +135,8 @@ def _write_fill_trace_file(
 
 
 def _should_write_fill_trace(slide_idx: int, module: str) -> bool:
-    """Only trace Customer Segmentation slide 1 unless explicitly expanded."""
-    return slide_idx == 1 and (module or "").strip().lower() == "customer segmentation"
+    """Enable fill trace persistence for all slides/modules."""
+    return True
 
 
 def _has_placeholder_columns(columns: list[str]) -> bool:
@@ -335,6 +335,20 @@ def generate_table_content(
     if not data_columns:
         data_columns = effective_columns[1:] if len(effective_columns) > 1 else effective_columns
 
+    # If context is empty (common after dev-server reload clears in-memory stores),
+    # avoid calling LLM and return a deterministic matrix instead of raising 500.
+    if not (retriever_content or "").strip():
+        logger.warning(
+            "Empty context for table generation module=%s rows=%d cols=%d; using Not found fallback",
+            module,
+            len(indexes),
+            len(data_columns),
+        )
+        return [
+            ["Not found in provided materials." for _ in data_columns]
+            for _ in indexes
+        ]
+
     retriever_chars_in_prompt = 0
 
     # ── Try slide-specific prompt builder ────────────────────────────────────
@@ -403,7 +417,15 @@ def generate_table_content(
             if match:
                 raw = match.group(1)
 
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # Some models prepend/append prose around JSON. Try extracting the
+            # first JSON array block before failing.
+            match = re.search(r"\[[\s\S]*\]", raw)
+            if not match:
+                raise
+            data = json.loads(match.group(0))
         if not isinstance(data, list):
             raise ValueError("Expected list of lists")
 
