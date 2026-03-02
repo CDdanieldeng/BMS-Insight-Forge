@@ -661,23 +661,34 @@ def render_controls_panel(slide_meta: dict, module: str):
                         json={
                             "slide_idx": slide_idx,
                             "module": module,
+                            "file_ids": module_fids,
                             "current_content": current_data,
                             "table_structure": table_structure,
+                            "current_column_headers": st.session_state.get(
+                                "column_headers_by_slide",
+                                {},
+                            ).get(slide_idx),
                             "user_message": user_msg,
                         },
                         timeout=TIMEOUT_LLM_GENERATION,
                     )
                     r.raise_for_status()
                     updated = r.json().get("table_data", [])
+                    updated_headers = r.json().get("column_headers")
                     if updated and st.session_state.pptx_bytes:
+                        fill_payload = {
+                            "slide_idx": slide_idx,
+                            "table_data_b64": base64.b64encode(
+                                json.dumps(updated).encode()
+                            ).decode(),
+                        }
+                        if updated_headers:
+                            fill_payload["column_headers_b64"] = base64.b64encode(
+                                json.dumps(updated_headers).encode()
+                            ).decode()
                         fill_r = API_SESSION.post(
                             f"{BACKEND_URL}/fill-engine/fill-table",
-                            data={
-                                "slide_idx": slide_idx,
-                                "table_data_b64": base64.b64encode(
-                                    json.dumps(updated).encode()
-                                ).decode(),
-                            },
+                            data=fill_payload,
                             files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
                             timeout=TIMEOUT_FILL_TABLE,
                         )
@@ -686,6 +697,10 @@ def render_controls_panel(slide_meta: dict, module: str):
                             fill_r.json()["pptx_base64"]
                         )
                         st.session_state.table_data_by_slide[slide_idx] = updated
+                        if updated_headers:
+                            st.session_state.setdefault("column_headers_by_slide", {})[
+                                slide_idx
+                            ] = updated_headers
                         st.success("Feedback applied!")
                         _rerun_in_module(module)
                 except Exception as e:

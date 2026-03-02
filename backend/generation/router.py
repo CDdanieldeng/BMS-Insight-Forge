@@ -23,8 +23,10 @@ class FillRequest(BaseModel):
 class ChatRequest(BaseModel):
     slide_idx: int
     module: str
+    file_ids: list[str]
     current_content: list[list[str]]
     table_structure: dict[str, Any]
+    current_column_headers: list[str] | None = None
     user_message: str
 
 
@@ -109,8 +111,10 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
             current_content=req.current_content,
             table_structure=req.table_structure,
             user_message=req.user_message,
+            file_ids=req.file_ids,
+            current_column_headers=req.current_column_headers,
         )
-        return {"table_data": updated}
+        return updated
     except Exception as e:
         logger.exception("Chat failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

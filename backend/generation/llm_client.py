@@ -72,16 +72,36 @@ def get_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-def complete(system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> str:
+def _get_client_by_provider(provider: str):
+    """Return a concrete LLM client for the requested provider."""
+    if (provider or "").lower() == "qwen":
+        return _get_qwen_client()
+    return _get_openai_client()
+
+
+def _get_model_by_provider(provider: str) -> str:
+    """Return the default model for a provider."""
+    if (provider or "").lower() == "qwen":
+        return os.getenv("QWEN_MODEL", "qwen-plus")
+    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def complete(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+) -> str:
     """
     Call LLM with system and user prompts, return assistant message content.
 
     max_tokens caps the output length, which prevents long-running generation
     from exhausting the HTTP timeout. Pass None to use the model default.
     """
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    client = get_llm_client()
-    model = get_model()
+    provider = (provider_override or os.getenv("LLM_PROVIDER", "openai")).lower()
+    client = _get_client_by_provider(provider)
+    model = model_override or _get_model_by_provider(provider)
     request_id = str(uuid.uuid4())[:8]
     start = time.perf_counter()
     logger.info(
