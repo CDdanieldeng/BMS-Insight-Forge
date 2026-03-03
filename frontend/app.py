@@ -1,6 +1,7 @@
 """Insight Forge - Streamlit frontend for GenAI-powered business plan slide filling."""
 
 import base64
+import html
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,8 @@ def init_session_state():
         "table_data_by_slide": {},
         "key_question_answers": {},
         "column_headers_by_slide": {},
+        # Chat history is isolated by slide_idx (no cross-slide memory sharing)
+        "chat_history_by_slide": {},
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -82,6 +85,21 @@ def _rerun_in_module(module: str):
     """Rerun while explicitly preserving the currently active module."""
     st.session_state.active_module = module
     st.rerun()
+
+
+def _get_slide_chat_history(slide_idx: int) -> list[dict[str, str]]:
+    by_slide = st.session_state.setdefault("chat_history_by_slide", {})
+    if slide_idx not in by_slide:
+        by_slide[slide_idx] = []
+    return by_slide[slide_idx]
+
+
+def _append_slide_chat_message(slide_idx: int, role: str, content: str):
+    content = str(content).strip()
+    if role not in {"user", "assistant"} or not content:
+        return
+    history = _get_slide_chat_history(slide_idx)
+    history.append({"role": role, "content": content})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,20 +542,21 @@ def render_slide_content(slide_meta: dict):
 
 
 def render_controls_panel(slide_meta: dict, module: str):
+    """File upload expander + Fill Slide button (right column, compact)."""
     slide_idx = slide_meta["idx"]
     module_fids = _module_file_ids(module)
 
     # ── Support files (compact, for slide page) ────────────────────────────
     with st.expander(
-        f"📂 Support Files — {len(module_fids)} ingested" if module_fids else "📂 Support Files (none)",
-        expanded=not bool(module_fids),
+        f"📂 Files ({len(module_fids)})" if module_fids else "📂 Files (0)",
+        expanded=False,
     ):
         new_files = st.file_uploader(
-            "Replace / add files for this module",
+            "Replace/add files for this module",
             type=["pptx", "docx", "doc"],
             accept_multiple_files=True,
             key=f"slide_uploader_{slide_idx}",
-            help="Uploading new files replaces the current set for this module only.",
+            help="New upload replaces this module's current file set.",
         )
         if new_files:
             if st.button(
@@ -548,17 +567,14 @@ def render_controls_panel(slide_meta: dict, module: str):
                 with st.spinner("Ingesting files…"):
                     ok = _ingest_only(module, new_files)
                 if ok:
-                    st.success(
-                        f"Ingested {len(st.session_state.file_ids_by_module[module])} file(s). "
-                        "Re-fill the slide to use the new documents."
-                    )
+                    st.caption(f"Updated files: {len(st.session_state.file_ids_by_module[module])}")
                     _rerun_in_module(module)
 
-    st.divider()
+    st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
     # ── Fill Slide ─────────────────────────────────────────────────────────
     if st.button(
-        "Fill Slide Template",
+        "Fill Slide",
         type="primary",
         use_container_width=True,
         key=f"fill_{slide_idx}",
@@ -603,7 +619,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                         column_headers = None
 
                 if column_headers:
-                    st.info(f"Segments identified: {', '.join(column_headers)}")
+                    st.caption(f"Segments: {', '.join(column_headers)}")
 
                 if table_data and st.session_state.pptx_bytes:
                     try:
@@ -630,7 +646,6 @@ def render_controls_panel(slide_meta: dict, module: str):
                         )
                         st.session_state.filled_slides.add(slide_idx)
                         st.session_state.table_data_by_slide[slide_idx] = table_data
-                        # Cache headers so the chat refinement flow can show them
                         if column_headers:
                             st.session_state.setdefault("column_headers_by_slide", {})[
                                 slide_idx
@@ -640,71 +655,237 @@ def render_controls_panel(slide_meta: dict, module: str):
                     except Exception as e:
                         st.error(f"Fill error: {e}")
 
-    st.divider()
 
-    # ── Agent Chat ─────────────────────────────────────────────────────────
-    st.subheader("Refine with AI")
-    user_msg = st.text_area(
-        "Describe adjustments (e.g., make Segment 1 more concise)",
-        key=f"chat_input_{slide_idx}",
+def render_chat_panel(slide_meta: dict, module: str):
+    """Full-width unified AI chat dialog rendered below the slide table."""
+    slide_idx = slide_meta["idx"]
+    module_fids = _module_file_ids(module)
+    chat_history = _get_slide_chat_history(slide_idx)
+
+    st.markdown(
+        """
+        <style>
+        /* keep button labels on one line in narrow right-side panel */
+        div[data-testid="stButton"] button,
+        div[data-testid="stFormSubmitButton"] button {
+            white-space: nowrap;
+            word-break: keep-all;
+        }
+        /* make chat action buttons compact (Send/Clear use tertiary type) */
+        div[data-testid="stButton"] button[kind="tertiary"] p {
+            font-size: 0.78rem !important;
+        }
+        div[data-testid="stButton"] button[kind="tertiary"] {
+            padding-top: 0.25rem !important;
+            padding-bottom: 0.25rem !important;
+        }
+        /* chat mode dropdown: keep only the caret visible when collapsed */
+        [class*="st-key-chat_mode_"] [data-baseweb="select"] span,
+        [class*="st-key-chat_mode_"] [data-baseweb="select"] p {
+            display: none !important;
+        }
+        [class*="st-key-chat_mode_"] [data-baseweb="select"] > div {
+            min-width: 2.2rem !important;
+            padding-left: 0.15rem !important;
+            padding-right: 0.15rem !important;
+        }
+        .ai-msg {
+            font-size: 0.85rem;
+            line-height: 1.4;
+            padding: 0.55rem 0.7rem;
+            border-radius: 10px;
+            margin-bottom: 0.4rem;
+            word-break: break-word;
+        }
+        .ai-msg.user {
+            background: #eaf4ff;
+            border: 1px solid #d3e7ff;
+        }
+        .ai-msg.assistant {
+            background: #ffeef0;
+            border: 1px solid #ffd7dc;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    if st.button("Apply Feedback", key=f"apply_{slide_idx}") and user_msg:
-        table_structure = slide_meta.get("table_structure")
-        current_data = st.session_state.table_data_by_slide.get(slide_idx)
+    st.markdown(
+        "<div style='font-size:0.9rem;font-weight:600;margin:0.1rem 0 0.35rem 0'>"
+        "Refine with AI</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Single unified chat box ─────────────────────────────────────────────
+    with st.container(border=True):
+        # Scrollable message history
+        with st.container(height=200, border=False):
+            if not chat_history:
+                st.markdown(
+                    "<div style='text-align:center;color:#aaa;padding:2.5rem 0;"
+                    "font-size:0.88rem'>Fill the slide, then ask me to refine it.</div>",
+                    unsafe_allow_html=True,
+                )
+            for msg in chat_history:
+                role = msg.get("role", "assistant")
+                css_role = "user" if role == "user" else "assistant"
+                content = html.escape(str(msg.get("content", ""))).replace("\n", "<br>")
+                st.markdown(
+                    f"<div class='ai-msg {css_role}'>{content}</div>",
+                    unsafe_allow_html=True,
+                )
+
+        input_nonce_by_slide = st.session_state.setdefault("chat_input_nonce_by_slide", {})
+        input_nonce = input_nonce_by_slide.get(slide_idx, 0)
+        input_key = f"chat_input_{slide_idx}_{input_nonce}"
+        mode_key = f"chat_mode_{slide_idx}"
+        if mode_key not in st.session_state:
+            st.session_state[mode_key] = "modify"
+        mode_col, input_col = st.columns([1, 4], gap="small")
+        with mode_col:
+            mode_options = {"modify": "🛠", "ask": "❓"}
+            chat_mode = st.selectbox(
+                "Mode",
+                options=list(mode_options.keys()),
+                format_func=lambda m: mode_options.get(m, m),
+                key=mode_key,
+                label_visibility="collapsed",
+            )
+        with input_col:
+            user_msg = st.text_input(
+                "msg",
+                key=input_key,
+                placeholder=(
+                    "Ask question only (no table changes)..."
+                    if chat_mode == "ask"
+                    else "Ask AI to refine this slide..."
+                ),
+                label_visibility="collapsed",
+            )
+    action_l, action_r = st.columns(2)
+    with action_l:
+        send_clicked = st.button(
+            "Send",
+            type="tertiary",
+            use_container_width=True,
+            key=f"send_chat_{slide_idx}",
+        )
+    with action_r:
+        clear_clicked = st.button(
+            "Clear",
+            type="tertiary",
+            use_container_width=True,
+            key=f"clear_chat_{slide_idx}",
+        )
+
+    if clear_clicked:
+        st.session_state.setdefault("chat_history_by_slide", {})[slide_idx] = []
+        st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
+        _rerun_in_module(module)
+        return
+
+    # ── Handle submission ───────────────────────────────────────────────────
+    if not (send_clicked and user_msg and user_msg.strip()):
+        if send_clicked:
+            st.warning("Please enter a message.")
+        return
+
+    table_structure = slide_meta.get("table_structure")
+    current_data = st.session_state.table_data_by_slide.get(slide_idx)
+    history_snapshot = list(chat_history)
+    clean_user_msg = user_msg.strip()
+    _append_slide_chat_message(slide_idx, "user", clean_user_msg)
+
+    if chat_mode == "modify":
         if not table_structure or not current_data:
+            _append_slide_chat_message(
+                slide_idx, "assistant",
+                "Please fill this slide first, then I can help you refine it.",
+            )
+            st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
             st.warning("Fill the slide first before refining.")
-        else:
-            with st.spinner("Applying feedback..."):
-                try:
-                    r = API_SESSION.post(
-                        f"{BACKEND_URL}/generation/chat",
-                        json={
-                            "slide_idx": slide_idx,
-                            "module": module,
-                            "file_ids": module_fids,
-                            "current_content": current_data,
-                            "table_structure": table_structure,
-                            "current_column_headers": st.session_state.get(
-                                "column_headers_by_slide",
-                                {},
-                            ).get(slide_idx),
-                            "user_message": user_msg,
-                        },
-                        timeout=TIMEOUT_LLM_GENERATION,
-                    )
-                    r.raise_for_status()
-                    updated = r.json().get("table_data", [])
-                    updated_headers = r.json().get("column_headers")
-                    if updated and st.session_state.pptx_bytes:
-                        fill_payload = {
-                            "slide_idx": slide_idx,
-                            "table_data_b64": base64.b64encode(
-                                json.dumps(updated).encode()
-                            ).decode(),
-                        }
-                        if updated_headers:
-                            fill_payload["column_headers_b64"] = base64.b64encode(
-                                json.dumps(updated_headers).encode()
-                            ).decode()
-                        fill_r = API_SESSION.post(
-                            f"{BACKEND_URL}/fill-engine/fill-table",
-                            data=fill_payload,
-                            files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                            timeout=TIMEOUT_FILL_TABLE,
-                        )
-                        fill_r.raise_for_status()
-                        st.session_state.pptx_bytes = base64.b64decode(
-                            fill_r.json()["pptx_base64"]
-                        )
-                        st.session_state.table_data_by_slide[slide_idx] = updated
-                        if updated_headers:
-                            st.session_state.setdefault("column_headers_by_slide", {})[
-                                slide_idx
-                            ] = updated_headers
-                        st.success("Feedback applied!")
-                        _rerun_in_module(module)
-                except Exception as e:
-                    st.error(f"Feedback failed: {e}")
+            _rerun_in_module(module)
+            return
+    elif not module_fids and not current_data:
+        _append_slide_chat_message(
+            slide_idx,
+            "assistant",
+            "Please upload support files or fill this slide first, then I can answer your question.",
+        )
+        st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
+        st.warning("Upload files or fill the slide before asking.")
+        _rerun_in_module(module)
+        return
+
+    with st.spinner("Thinking…"):
+        try:
+            r = API_SESSION.post(
+                f"{BACKEND_URL}/generation/chat",
+                json={
+                    "slide_idx": slide_idx,
+                    "module": module,
+                    "file_ids": module_fids,
+                    "current_content": current_data or [],
+                    "table_structure": table_structure or {},
+                    "current_column_headers": st.session_state.get(
+                        "column_headers_by_slide", {}
+                    ).get(slide_idx),
+                    "user_message": clean_user_msg,
+                    "conversation_history": history_snapshot,
+                    "mode": chat_mode,
+                },
+                timeout=TIMEOUT_LLM_GENERATION,
+            )
+            r.raise_for_status()
+            payload = r.json()
+            resolved_mode = payload.get("mode", chat_mode)
+            updated = payload.get("table_data", [])
+            updated_headers = payload.get("column_headers")
+            assistant_msg = payload.get(
+                "assistant_message",
+                (
+                    "Thanks for your feedback. I have updated this slide."
+                    if resolved_mode == "modify"
+                    else "Here is what I found based on your question."
+                ),
+            )
+            if resolved_mode == "modify" and updated and st.session_state.pptx_bytes:
+                fill_payload = {
+                    "slide_idx": slide_idx,
+                    "table_data_b64": base64.b64encode(
+                        json.dumps(updated).encode()
+                    ).decode(),
+                }
+                if updated_headers:
+                    fill_payload["column_headers_b64"] = base64.b64encode(
+                        json.dumps(updated_headers).encode()
+                    ).decode()
+                fill_r = API_SESSION.post(
+                    f"{BACKEND_URL}/fill-engine/fill-table",
+                    data=fill_payload,
+                    files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                    timeout=TIMEOUT_FILL_TABLE,
+                )
+                fill_r.raise_for_status()
+                st.session_state.pptx_bytes = base64.b64decode(
+                    fill_r.json()["pptx_base64"]
+                )
+                st.session_state.table_data_by_slide[slide_idx] = updated
+                if updated_headers:
+                    st.session_state.setdefault("column_headers_by_slide", {})[
+                        slide_idx
+                    ] = updated_headers
+                st.success("Slide updated!")
+            st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
+            _append_slide_chat_message(slide_idx, "assistant", assistant_msg)
+            _rerun_in_module(module)
+        except Exception as e:
+            _append_slide_chat_message(
+                slide_idx,
+                "assistant",
+                "Sorry, I couldn't apply this refinement due to a system error. "
+                "Please try again and I will assist right away.",
+            )
+            st.error(f"Feedback failed: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -779,24 +960,24 @@ def render_module_tab(module: str, slides: list):
         slide_idx = slide_meta["idx"]
         filled = slide_idx in st.session_state.filled_slides
 
-        # Slide page header
-        icon = MODULE_ICONS.get(module, "📋")
-        fill_badge = (
-            "<span style='background:#d4edda;color:#155724;border-radius:8px;"
-            "padding:2px 10px;font-size:0.8rem;margin-left:10px'>✅ Filled</span>"
-            if filled else ""
-        )
-        st.markdown(
-            f"<h3 style='margin-bottom:0.2rem'>{icon} {module} &mdash; Slide {cur}"
-            f"{fill_badge}</h3>",
-            unsafe_allow_html=True,
-        )
-
         col_slide, col_ctrl = st.columns([3, 1])
         with col_slide:
+            # Slide page header
+            icon = MODULE_ICONS.get(module, "📋")
+            fill_badge = (
+                "<span style='background:#d4edda;color:#155724;border-radius:8px;"
+                "padding:2px 10px;font-size:0.8rem;margin-left:10px'>✅ Filled</span>"
+                if filled else ""
+            )
+            st.markdown(
+                f"<h3 style='margin-bottom:0.2rem'>{icon} {module} &mdash; Slide {cur}"
+                f"{fill_badge}</h3>",
+                unsafe_allow_html=True,
+            )
             render_slide_content(slide_meta)
         with col_ctrl:
             render_controls_panel(slide_meta, module)
+            render_chat_panel(slide_meta, module)
 
         # Download when all slides in module are done
         all_filled = all(s["idx"] in st.session_state.filled_slides for s in slides)

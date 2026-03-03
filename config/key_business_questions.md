@@ -2,9 +2,9 @@
 
 ## Customer Segmentation
 
-1. 谁是患者旅程中杠杆点的主要利益相关者（患者、患者倡导团体/HCP/有组织的客户/卓越中心/付款人）？
-2. 我们如何定义最有可能接受且对品牌最有价值的客户细分群体？
-3. 在杠杆点需要改变哪些具体行为？
+1. Who are the key stakeholders at the leverage points along the patient journey (patients, patient advocacy groups, HCPs, organized customers, centers of excellence, payers)?
+2. How do we define the customer segments that are most likely to adopt and deliver the highest value to the brand?
+3. What specific behaviors need to change at the identified leverage points?
 
 ## Messaging Strategy
 

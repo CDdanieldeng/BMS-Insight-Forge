@@ -1,11 +1,12 @@
 """FastAPI router for the generation service (orchestrator)."""
 
 from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from generation.agent import apply_feedback
+from generation.agent import apply_feedback, answer_question
 from generation.key_questions import get_questions_for_module
 from generation.orchestrator import run_fill, generate_key_question_answers
 
@@ -28,6 +29,8 @@ class ChatRequest(BaseModel):
     table_structure: dict[str, Any]
     current_column_headers: list[str] | None = None
     user_message: str
+    conversation_history: list[dict[str, str]] | None = None
+    mode: Literal["ask", "modify"] = "modify"
 
 
 class KeyQuestionsResponse(BaseModel):
@@ -106,6 +109,18 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
     Apply user feedback to update table content via agent.
     """
     try:
+        if req.mode == "ask":
+            answer = answer_question(
+                module=req.module,
+                current_content=req.current_content,
+                table_structure=req.table_structure,
+                user_message=req.user_message,
+                file_ids=req.file_ids,
+                current_column_headers=req.current_column_headers,
+                conversation_history=req.conversation_history,
+            )
+            return {"mode": "ask", **answer}
+
         updated = apply_feedback(
             module=req.module,
             current_content=req.current_content,
@@ -113,8 +128,9 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
             user_message=req.user_message,
             file_ids=req.file_ids,
             current_column_headers=req.current_column_headers,
+            conversation_history=req.conversation_history,
         )
-        return updated
+        return {"mode": "modify", **updated}
     except Exception as e:
         logger.exception("Chat failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

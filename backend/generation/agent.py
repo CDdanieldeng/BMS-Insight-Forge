@@ -13,6 +13,20 @@ from generation.slide_prompts import get_prompt_builder
 logger = setup_logging("generation")
 
 
+def _concise_assistant_message(text: str) -> str:
+    """Keep assistant chat reply concise and readable for the UI."""
+    raw = " ".join(str(text or "").strip().split())
+    if not raw:
+        return ""
+    # Keep at most first 2 sentence-like chunks.
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", raw) if p.strip()]
+    concise = " ".join(parts[:2]) if parts else raw
+    # Hard cap for very verbose generations.
+    if len(concise) > 180:
+        concise = concise[:177].rstrip() + "..."
+    return concise
+
+
 def _feedback_needs_uploaded_context(
     module: str,
     user_message: str,
@@ -86,6 +100,7 @@ def apply_feedback(
     user_message: str,
     file_ids: list[str],
     current_column_headers: list[str] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Update segment headers + table content using:
@@ -153,9 +168,19 @@ def apply_feedback(
         )
         + "You may rename segment headers if feedback requests it, but the segment count must stay unchanged.\n"
         + "Table shape must stay unchanged: same number of rows and segment columns.\n"
+        + "Your assistant response must be concise: max 2 short sentences (<=180 chars), polite and professional.\n"
         + "Output ONLY valid JSON object with exactly these keys:\n"
-        + '{"column_headers": ["..."], "table_data": [["..."]]}'
+        + '{"column_headers": ["..."], "table_data": [["..."]], "assistant_message": "..."}'
     )
+
+    safe_history = conversation_history or []
+    history_lines: list[str] = []
+    for msg in safe_history[-12:]:
+        role = str(msg.get("role", "")).strip().lower()
+        content = str(msg.get("content", "")).strip()
+        if role in {"user", "assistant"} and content:
+            history_lines.append(f"{role}: {content}")
+    history_block = "\n".join(history_lines) if history_lines else "(none)"
 
     user = f"""{base_user}
 
@@ -164,6 +189,9 @@ Current table data (JSON):
 
 Current segment headers: {existing_headers}
 
+Conversation history for this slide only:
+{history_block}
+
 User feedback:
 {user_message}
 
@@ -171,7 +199,9 @@ Rules:
 - Return exactly {len(existing_headers)} column headers.
 - Return exactly {len(indexes)} rows in table_data.
 - Each row in table_data must contain exactly {len(existing_headers)} values.
-- Keep language concise and professional.
+- assistant_message should clearly explain what changed in this round.
+- assistant_message must be <=2 short sentences and <=180 characters.
+- Keep language concise, polite, professional, and warm.
 
 Return the JSON object now:"""
 
@@ -191,8 +221,11 @@ Return the JSON object now:"""
         elif isinstance(data, dict):
             parsed_headers = data.get("column_headers", existing_headers)
             parsed_table = data.get("table_data", [])
+            assistant_message = str(data.get("assistant_message", "")).strip()
         else:
             raise ValueError("Expected JSON object or JSON array")
+        if isinstance(data, list):
+            assistant_message = ""
 
         normalized_headers = [str(h).strip() for h in parsed_headers if str(h).strip()]
         if len(normalized_headers) != len(existing_headers):
@@ -222,10 +255,102 @@ Return the JSON object now:"""
             len(result),
             len(normalized_headers),
         )
+        assistant_message = _concise_assistant_message(assistant_message)
+        if not assistant_message:
+            assistant_message = (
+                "Thanks for your feedback. I have updated this slide while keeping "
+                "the original table structure unchanged."
+            )
         return {
             "table_data": result,
             "column_headers": normalized_headers,
+            "assistant_message": assistant_message,
         }
     except Exception as e:
         logger.exception("Agent feedback failed: %s", e)
+        raise
+
+
+def answer_question(
+    module: str,
+    current_content: list[list[str]],
+    table_structure: dict[str, Any],
+    user_message: str,
+    file_ids: list[str],
+    current_column_headers: list[str] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """
+    Answer user question in ask mode without modifying table content.
+
+    This mode behaves like "ask-only": it uses uploaded files + current
+    table snapshot to provide an answer, and never returns updated table data.
+    """
+    columns = table_structure.get("columns", [])
+    indexes = table_structure.get("indexes", [])
+    existing_headers = (
+        [str(c).strip() for c in (current_column_headers or []) if str(c).strip()]
+        or [str(c).strip() for c in columns if str(c).strip()]
+    )
+    current_width = max(
+        (len(r) for r in current_content if isinstance(r, list)),
+        default=0,
+    )
+    if current_width > 0:
+        if len(existing_headers) > current_width:
+            existing_headers = existing_headers[-current_width:]
+        while len(existing_headers) < current_width:
+            existing_headers.append(f"Segment {len(existing_headers) + 1}")
+
+    query = f"{enhance_query(module, table_structure)}; user question: {user_message}".strip("; ")
+    context = _get_context_content(file_ids, query=query, top_k=60) if file_ids else ""
+
+    safe_history = conversation_history or []
+    history_lines: list[str] = []
+    for msg in safe_history[-12:]:
+        role = str(msg.get("role", "")).strip().lower()
+        content = str(msg.get("content", "")).strip()
+        if role in {"user", "assistant"} and content:
+            history_lines.append(f"{role}: {content}")
+    history_block = "\n".join(history_lines) if history_lines else "(none)"
+
+    system = (
+        "You are a business strategy copilot in ask-only mode.\n"
+        "Your task is to answer the user's question using uploaded documents "
+        "and the current slide table snapshot.\n"
+        "Important: DO NOT propose or imply table edits unless user explicitly asks "
+        "for recommendations; in ask-only mode we are not applying changes.\n"
+        "If evidence is insufficient, state this clearly and suggest what data is missing.\n"
+        "Keep answer concise, practical, and professional."
+    )
+    user = f"""Module: {module}
+Uploaded context:
+{context or "(no uploaded context found)"}
+
+Current row labels: {indexes}
+Current segment headers: {existing_headers}
+Current table data (JSON):
+{json.dumps(current_content, ensure_ascii=False)}
+
+Conversation history:
+{history_block}
+
+User question:
+{user_message}
+
+Answer directly in plain text."""
+
+    try:
+        raw = complete(system, user, max_tokens=900)
+        assistant_message = " ".join(str(raw or "").strip().split())
+        if len(assistant_message) > 800:
+            assistant_message = assistant_message[:797].rstrip() + "..."
+        if not assistant_message:
+            assistant_message = (
+                "I could not generate a reliable answer right now. "
+                "Please try rephrasing the question."
+            )
+        return {"assistant_message": assistant_message}
+    except Exception as e:
+        logger.exception("Ask-mode answer failed: %s", e)
         raise
