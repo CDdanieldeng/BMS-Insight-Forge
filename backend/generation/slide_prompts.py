@@ -24,10 +24,8 @@ _CUSTOMER_SEGMENTATION_ROW_SCHEMA: list[dict[str, str]] = [
     {
         "row_label": "Demographics",
         "definition": (
-            "Scope components: age, gender. "
-            "Only personal identity attributes are allowed. "
-            "Exclude location, city tier, hospital level, specialty, "
-            "institution type, and patient volume."
+            "age, gender, and personal identity attributes only."
+            "Exclude location, city tier, hospital level, institution type, and patient volume."
         ),
     },
     {
@@ -219,27 +217,14 @@ Return the JSON array of arrays now (outer = rows, inner = segments):"""
     return system, user
 
 
-def _customer_segmentation_strict_extraction_prompts(
+def _customer_segmentation_slide1_prompts(
     content: str,
     indexes: list[str],
     segment_names: list[str],
 ) -> tuple[str, str]:
-    """Strict extraction prompt for Customer Segmentation slides that need extraction-heavy rows."""
+    """Focused prompt for Customer Segmentation slide 1."""
     n_segments = len(segment_names)
     n_rows = len(indexes)
-
-    # Build the row schema block: use predefined definition when available,
-    # otherwise fall back to a generic definition.
-    schema_lines: list[str] = []
-    for label in indexes:
-        definition = _CS_SCHEMA_BY_LABEL.get(label.lower().strip())
-        if definition:
-            schema_lines.append(f'  - "{label}": {definition}')
-        else:
-            schema_lines.append(
-                f'  - "{label}": Explicitly stated information related to {label} for this segment.'
-            )
-    schema_block = "\n".join(schema_lines)
 
     segments_list = ", ".join(f'"{s}"' for s in segment_names)
 
@@ -254,55 +239,76 @@ STRICT CLASSIFICATION & EXTRACTION PRINCIPLE
 
 - Only use information explicitly stated in the materials.
 - Do NOT infer implied attributes.
-- Evaluate each data point independently against the relevant row definition.
-- Do NOT force a data point into a row if it does not strictly match the definition.
-- If not fully confident that a data point matches the row definition, use exactly:
+- Evaluate each data point independently against the row definitions below.
+- Do NOT force a data point into a row if it does not strictly match the row definition.
+- If not fully confident that a data point matches, use exactly:
   "Not found in provided materials."
 
 ------------------------------------------------------------
 
-ROW SCHEMA (FIXED)
+ROW DEFINITIONS (STRICT)
 
-Each row label has a definition that must be followed strictly:
+- Demographics: age, gender only.
+- Preferences:
+  Explicit preferences regarding:
+  1) Interaction style with pharmaceutical representatives (e.g., persuasion openness, detailing depth),
+  2) Preferred information channels (including offline interaction with pharma staff, MSL, sales reps, online interaction via WeChat/email, conferences, medical journals, third-party platforms),
+  3) Preferred evidence types to trigger prescription (e.g., clinical data, peer case sharing, real-world evidence),
+  4) Communication approach during professional interaction (if it reflects information engagement preference rather than patient behavior).
 
-{schema_block}
+  Include BOTH online and offline pharma-related engagement channels.
+  Include explicitly stated preferred information source or engagement method.
+  
+  Exclude:
+  - Patient communication style unless it directly reflects professional interaction preference.
+  - Treatment choice logic.
+  - Prescribing behavior itself.
+- Attitudes/Beliefs: explicit mindset, product perceptions, treatment philosophy. Exclude observed prescribing behavior.
+- Capabilities: knowledge level, clinical experience, support staff, operational capability, clinical confidence. Exclude beliefs and environmental context.
+- Environment:
+  Practice setting and structural context including:
+  1) City tier,
+  2) Hospital level or institution type,
+  3) Practice size,
+  4) Monthly patient volume (including explicit average number of moderate-to-severe PsO patients treated per month),
+  5) Sub-specialty status,
+  6) Attendance in specialized outpatient clinics.
+
+  Patient volume MUST be included if explicitly provided.
+
+  Exclude:
+  - Age and gender (belongs to Demographics),
+  - Personal beliefs,
+  - Clinical decision preferences.
+- Behaviors: observable actions (prescribing patterns, product usage, sequencing, early adoption status, switching behavior, adoption timing).
+- Drivers: explicit motivators to prescribe/use the brand.
+- Barriers: explicit reasons against prescribing/using the brand.
 
 ------------------------------------------------------------
 
-EXHAUSTIVE SEARCH REQUIREMENT (APPLIES TO EACH ROW AND EACH SEGMENT)
+EXTRACTION METHOD (MANDATORY)
 
-For each segment and for each row label:
-
-1. Scan the entire material and identify ALL explicitly stated data points \
-that strictly match the row definition.
-2. Re-scan the entire material to ensure no valid matches are omitted. \
-Do NOT stop after identifying one example.
-3. Extract all valid matching statements before summarisation.
-4. If no explicit match exists for a given row and segment, use:
+For each segment and each row:
+1. Scan the entire material for all direct evidence that strictly matches the row definition.
+2. Re-scan to ensure no valid matches are omitted.
+3. Treat each scope component listed in the row definition as an independent search dimension. All components must be verified before concluding completeness.
+4. Apply boundary check for Demographics, Preferences, and Environment:
+   - If the statement describes where they practice (e.g., city tier, hospital level, practice size, patient volume), classify as Environment, not Demographics.
+   - Only classify as Preferences if it explicitly refers to interaction with pharmaceutical representatives, otherwise "Not found in provided materials.".
+   - Do not leave practice size or institutional scale unclassified; these must belong to Environment.
+5. Summarize all valid points into 1-3 concise conclusions.
+6. If no valid evidence exists, use:
    "Not found in provided materials."
 
 ------------------------------------------------------------
 
-SUMMARISATION REQUIREMENT (APPLIES AFTER COMPLETE EXTRACTION PER ROW PER SEGMENT)
+SUMMARISATION RULES
 
-After completing exhaustive extraction for a given row label and segment:
-
-1. If no valid matches exist, return exactly:
-   "Not found in provided materials."
-
-2. If valid matches exist:
-   - Summarise them into 1–4 key conclusions (maximum 4).
-   - Retain numerical values only when they directly describe the segment \
-itself under the row definition (e.g., volume, age, size).
-   - Convert numerical values into qualitative conclusions when they represent \
-proportions, percentages, comparisons across segments, or survey statistics. \
-Do NOT report raw numbers.
-
-3. Each conclusion must:
-   - Represent one distinct idea.
-   - Be concise and non-redundant.
-   - Use neutral, objective, descriptive language.
-   - Strictly reflect the extracted content only.
+- Each conclusion must represent one distinct idea.
+- Keep wording concise, neutral, objective, and non-redundant.
+- Strictly reflect extracted evidence only.
+- Retain numerical values only when they directly describe the segment itself under the row definition (e.g., age, volume, size).
+- Convert numerical values into qualitative conclusions when they represent proportions, percentages, comparisons across segments, or survey statistics. Do NOT report raw numbers.
 
 ------------------------------------------------------------
 
@@ -352,7 +358,7 @@ def _customer_segmentation_prompts(
     normalized_indexes = [_normalize_label(i) for i in indexes]
     if normalized_indexes == _CS_SLIDE2_INDEXES:
         return _customer_segmentation_slide2_prompts(content, indexes, segment_names)
-    return _customer_segmentation_strict_extraction_prompts(content, indexes, segment_names)
+    return _customer_segmentation_slide1_prompts(content, indexes, segment_names)
 
 
 def _messaging_strategy_slide3_prompts(
