@@ -70,6 +70,8 @@ def init_session_state():
         "column_headers_by_slide": {},
         # Chat history is isolated by slide_idx (no cross-slide memory sharing)
         "chat_history_by_slide": {},
+        # Trigger completion celebration only once per completion transition.
+        "completion_celebrated": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -1104,8 +1106,14 @@ def main():
     render_module_tab(active_module, slides_by_module[active_module])
 
     # ── Final download ─────────────────────────────────────────────────────
-    if n_total > 0 and n_filled == n_total and st.session_state.pptx_bytes:
-        st.balloons()
+    is_complete = n_total > 0 and n_filled == n_total and bool(st.session_state.pptx_bytes)
+    if not is_complete:
+        st.session_state.completion_celebrated = False
+
+    if is_complete:
+        if not st.session_state.completion_celebrated:
+            st.balloons()
+            st.session_state.completion_celebrated = True
         st.divider()
         st.success("🎉 All modules complete!")
         st.download_button(
