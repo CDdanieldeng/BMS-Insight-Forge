@@ -962,7 +962,8 @@ def render_module_tab(module: str, slides: list):
         slide_idx = slide_meta["idx"]
         filled = slide_idx in st.session_state.filled_slides
 
-        col_slide, col_ctrl = st.columns([3, 1])
+        # Reduce table area so the right controls/chat panel has more room.
+        col_slide, col_ctrl = st.columns([2, 1])
         with col_slide:
             # Slide page header
             icon = MODULE_ICONS.get(module, "📋")

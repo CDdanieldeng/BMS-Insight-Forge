@@ -414,11 +414,31 @@ OUTPUT FORMAT
 - Inner array order must exactly match: {segment_names}
 - Total rows: {n_rows}
 - Values per row: {n_segments}
-- No markdown, no explanations, no extra keys."""
+- No markdown, no explanations, no extra keys.
+
+STRICT SHAPE RULES (MANDATORY)
+1. The top-level value MUST be a JSON array with exactly {n_rows} items.
+2. Every top-level item MUST be a JSON array (never a plain string/object/null).
+3. Every inner array MUST contain exactly {n_segments} string values.
+4. Even when a row uses one shared statement across segments
+   (e.g., "Desired Behavior Change", "Differentiated Competitive Benefit"),
+   you MUST still output an array with {n_segments} strings by repeating the same
+   core statement in each segment position.
+5. Invalid example (DO NOT do this):
+   ["row1_seg1", "row1_seg2"],
+   "shared statement for all segments"
+6. Valid example:
+   ["row1_seg1", "row1_seg2"],
+   ["shared statement", "shared statement"]"""
 
     user = f"""Segments to populate (columns): {segments_list}
 
 Row labels to fill (in order): {indexes}
+
+Mandatory shape reminder:
+- Exactly {n_rows} rows in the outer array.
+- Every row must be an array with exactly {n_segments} strings.
+- Never return a row as a plain string.
 
 Source materials:
 {content}
