@@ -7,7 +7,8 @@ from typing import Any
 from shared.logging_config import setup_logging
 
 from generation.llm_client import complete
-from generation.orchestrator import _get_context_content, enhance_query
+from generation.orchestrator import _get_context_content
+from generation.query_enhancer import enhance_query
 from generation.slide_prompts import get_prompt_builder
 
 logger = setup_logging("generation")

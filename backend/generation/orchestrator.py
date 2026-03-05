@@ -12,6 +12,7 @@ from shared.logging_config import setup_logging
 
 from generation.key_questions import get_questions_for_module
 from generation.llm_client import complete
+from generation.query_enhancer import enhance_query
 from generation.slide_prompts import get_prompt_builder
 
 logger = setup_logging("generation")
@@ -300,45 +301,6 @@ def _get_context_content(file_ids: list[str], query: str, top_k: int = 50) -> st
     if _use_retriever():
         return _retriever_search(file_ids, query, top_k=top_k)
     return _full_markdown_context(file_ids)
-
-
-def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
-    """
-    Build LLM-enhanced search query from key questions and table structure.
-    """
-    questions = get_questions_for_module(module)
-    columns = table_structure.get("columns", [])
-    indexes = table_structure.get("indexes", [])
-
-    system = """You are a search query enhancer. Given the business key questions and table structure.
-Output a single, concise search query (in English) that would help retrieve relevant content to answer these questions and fill the table.
-Output ONLY the search query, no explanation."""
-
-    user = f"""Key business questions:
-{chr(10).join(f'- {q}' for q in questions)}
-
-Table columns: {columns}
-Table row indexes: {indexes}
-
-Generate search query:"""
-
-    try:
-        start = time.perf_counter()
-        query = complete(system, user, max_tokens=120)
-        result = query.strip().strip('"').strip("'")
-        logger.info(
-            "Enhance query done module=%s questions=%d columns=%d indexes=%d result_len=%d elapsed_ms=%d",
-            module,
-            len(questions),
-            len(columns),
-            len(indexes),
-            len(result),
-            int((time.perf_counter() - start) * 1000),
-        )
-        return result
-    except Exception as e:
-        logger.warning("LLM enhance query failed, using fallback: %s", e)
-        return " ".join(questions[:2]) if questions else ""
 
 
 def extract_segment_names(
