@@ -21,6 +21,7 @@ class PipelineConfig:
     max_candidates: int = 150
     max_facet_new_per_request: int = 120
     facet_batch_size: int = 12
+    facet_async_workers: int = 3
     max_chunks_agent_read: int = 20
     max_to_compress: int = 20
     max_iterations_expand: int = 1
@@ -32,6 +33,7 @@ def load_pipeline_config() -> PipelineConfig:
         max_candidates=max(10, _env_int("MAX_CANDIDATES", 150)),
         max_facet_new_per_request=max(1, _env_int("MAX_FACET_NEW_PER_REQUEST", 120)),
         facet_batch_size=max(1, _env_int("FACET_BATCH_SIZE", 12)),
+        facet_async_workers=max(1, _env_int("FACET_ASYNC_WORKERS", 3)),
         max_chunks_agent_read=max(1, _env_int("MAX_CHUNKS_AGENT_READ", 20)),
         max_to_compress=max(1, _env_int("MAX_TO_COMPRESS", 20)),
         max_iterations_expand=max(0, _env_int("MAX_ITERATIONS_EXPAND", 1)),

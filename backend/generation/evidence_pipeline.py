@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -196,23 +197,47 @@ def run_evidence_pipeline(
                 if generated < config.max_facet_new_per_request:
                     uncached.append(chunk)
                     generated += 1
+
+            def _fallback_facet(chunk: ChunkRecord) -> dict[str, Any]:
+                return {
+                    "segments": chunk.segment_hint,
+                    "topics": [],
+                    "channels": [],
+                    "numbers": [],
+                    "noise_flag": chunk.noise_flag,
+                }
+
             batch_size = max(1, config.facet_batch_size)
-            for i in range(0, len(uncached), batch_size):
-                batch = uncached[i : i + batch_size]
-                if not batch:
-                    continue
-                batch_calls += 1
-                batch_facets = extract_facets_batch(batch)
-                for chunk in batch:
-                    facet = batch_facets.get(chunk.chunk_id) or {
-                        "segments": chunk.segment_hint,
-                        "topics": [],
-                        "channels": [],
-                        "numbers": [],
-                        "noise_flag": chunk.noise_flag,
+            batches = [
+                uncached[i : i + batch_size]
+                for i in range(0, len(uncached), batch_size)
+                if uncached[i : i + batch_size]
+            ]
+            batch_calls = len(batches)
+            worker_count = min(max(1, config.facet_async_workers), batch_calls or 1)
+            metrics["facet_async_workers"] = worker_count
+
+            if batch_calls > 0 and worker_count > 1:
+                # Run LLM facet extraction concurrently, then update cache serially
+                # to avoid race conditions in JSONL append writes.
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    future_to_batch = {
+                        executor.submit(extract_facets_batch, batch): batch for batch in batches
                     }
-                    _cache.set(chunk.chunk_id, facet)
-                    facets[chunk.chunk_id] = facet
+                    for future in as_completed(future_to_batch):
+                        batch = future_to_batch[future]
+                        batch_facets = future.result()
+                        for chunk in batch:
+                            facet = batch_facets.get(chunk.chunk_id) or _fallback_facet(chunk)
+                            _cache.set(chunk.chunk_id, facet)
+                            facets[chunk.chunk_id] = facet
+            else:
+                for batch in batches:
+                    batch_facets = extract_facets_batch(batch)
+                    for chunk in batch:
+                        facet = batch_facets.get(chunk.chunk_id) or _fallback_facet(chunk)
+                        _cache.set(chunk.chunk_id, facet)
+                        facets[chunk.chunk_id] = facet
             metrics["facet_cache_hit"] = hit
             metrics["facet_cache_miss"] = miss
             metrics["facet_new_generated"] = len(uncached)
