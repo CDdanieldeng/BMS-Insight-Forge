@@ -7,6 +7,8 @@ import uuid
 import httpx
 from shared.logging_config import setup_logging
 
+from generation.stage_metrics import record_llm_usage
+
 logger = setup_logging("generation")
 
 # Lazy imports
@@ -140,6 +142,14 @@ def complete(
             prompt_tokens if prompt_tokens is not None else "unknown",
             completion_tokens if completion_tokens is not None else "unknown",
             total_tokens if total_tokens is not None else "unknown",
+        )
+        record_llm_usage(
+            provider=provider,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            elapsed_ms=elapsed_ms,
         )
         return content or ""
     except Exception as e:

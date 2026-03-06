@@ -135,7 +135,13 @@ def apply_feedback(
 
     if need_uploaded_context and file_ids:
         query = f"{enhance_query(module, table_structure)}; user feedback: {user_message}".strip("; ")
-        context = _get_context_content(file_ids, query=query, top_k=60)
+        context = _get_context_content(
+            file_ids,
+            query=query,
+            top_k=60,
+            module=module,
+            table_structure=table_structure,
+        )
     else:
         context = ""
         logger.info(
@@ -304,7 +310,17 @@ def answer_question(
             existing_headers.append(f"Segment {len(existing_headers) + 1}")
 
     query = f"{enhance_query(module, table_structure)}; user question: {user_message}".strip("; ")
-    context = _get_context_content(file_ids, query=query, top_k=60) if file_ids else ""
+    context = (
+        _get_context_content(
+            file_ids,
+            query=query,
+            top_k=60,
+            module=module,
+            table_structure=table_structure,
+        )
+        if file_ids
+        else ""
+    )
 
     safe_history = conversation_history or []
     history_lines: list[str] = []

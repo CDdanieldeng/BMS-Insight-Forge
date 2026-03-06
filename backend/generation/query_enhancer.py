@@ -10,6 +10,7 @@ from shared.logging_config import setup_logging
 
 from generation.key_questions import get_questions_for_module
 from generation.llm_client import complete
+from generation.stage_metrics import stage_scope
 
 logger = setup_logging("generation")
 
@@ -128,49 +129,50 @@ def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
     - other modules:
       Use generic question+table enhancement.
     """
-    columns = table_structure.get("columns", [])
-    indexes = table_structure.get("indexes", [])
-    questions = get_questions_for_module(module)
-    normalized_module = _normalize_label(module)
-    mode, system, user = _module_table_structure_prompt(module, columns, indexes)
+    with stage_scope("query_enhancement"):
+        columns = table_structure.get("columns", [])
+        indexes = table_structure.get("indexes", [])
+        questions = get_questions_for_module(module)
+        normalized_module = _normalize_label(module)
+        mode, system, user = _module_table_structure_prompt(module, columns, indexes)
 
-    llm_raw = ""
-    final_query = ""
-    try:
-        start = time.perf_counter()
-        llm_raw = complete(system, user, max_tokens=180)
-        table_query = llm_raw.strip().strip('"').strip("'")
+        llm_raw = ""
+        final_query = ""
+        try:
+            start = time.perf_counter()
+            llm_raw = complete(system, user, max_tokens=180)
+            table_query = llm_raw.strip().strip('"').strip("'")
 
-        if normalized_module in {"customer segmentation", "messaging strategy"}:
-            question_query = "; ".join(q.strip() for q in questions if q and q.strip())
-            final_query = "; ".join(part for part in [question_query, table_query] if part).strip()
-        else:
-            final_query = table_query
+            if normalized_module in {"customer segmentation", "messaging strategy"}:
+                question_query = "; ".join(q.strip() for q in questions if q and q.strip())
+                final_query = "; ".join(part for part in [question_query, table_query] if part).strip()
+            else:
+                final_query = table_query
 
-        logger.info(
-            "Enhance query done module=%s mode=%s questions=%d columns=%d indexes=%d result_len=%d elapsed_ms=%d",
-            module,
-            mode,
-            len(questions),
-            len(columns),
-            len(indexes),
-            len(final_query),
-            int((time.perf_counter() - start) * 1000),
-        )
-        return final_query
-    except Exception as e:
-        logger.warning("LLM enhance query failed, using fallback module=%s err=%s", module, e)
-        if normalized_module in {"customer segmentation", "messaging strategy"}:
-            final_query = "; ".join(q.strip() for q in questions if q and q.strip())
-        else:
-            final_query = " ".join(questions[:2]) if questions else ""
-        return final_query
-    finally:
-        _write_query_trace_file(
-            module=module,
-            mode=mode,
-            system_prompt=system,
-            user_prompt=user,
-            llm_raw_response=llm_raw,
-            final_query=final_query,
-        )
+            logger.info(
+                "Enhance query done module=%s mode=%s questions=%d columns=%d indexes=%d result_len=%d elapsed_ms=%d",
+                module,
+                mode,
+                len(questions),
+                len(columns),
+                len(indexes),
+                len(final_query),
+                int((time.perf_counter() - start) * 1000),
+            )
+            return final_query
+        except Exception as e:
+            logger.warning("LLM enhance query failed, using fallback module=%s err=%s", module, e)
+            if normalized_module in {"customer segmentation", "messaging strategy"}:
+                final_query = "; ".join(q.strip() for q in questions if q and q.strip())
+            else:
+                final_query = " ".join(questions[:2]) if questions else ""
+            return final_query
+        finally:
+            _write_query_trace_file(
+                module=module,
+                mode=mode,
+                system_prompt=system,
+                user_prompt=user,
+                llm_raw_response=llm_raw,
+                final_query=final_query,
+            )

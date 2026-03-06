@@ -1,4 +1,4 @@
-"""Convert pptx/docx to markdown using markitdown."""
+"""Convert supported files to markdown using markitdown."""
 
 import re
 import tempfile
@@ -72,7 +72,7 @@ def clean_text(text: str) -> str:
 
 def convert_to_markdown(content: bytes, filename: str) -> str:
     """
-    Convert uploaded file (pptx or docx) to markdown text.
+    Convert uploaded file to markdown text.
 
     Args:
         content: Raw file bytes
@@ -82,8 +82,10 @@ def convert_to_markdown(content: bytes, filename: str) -> str:
         Markdown text content
     """
     ext = Path(filename).suffix.lower()
-    if ext not in (".pptx", ".docx", ".doc"):
-        raise ValueError(f"Unsupported format: {filename}. Use .pptx or .docx")
+    if ext == ".md":
+        return clean_text(content.decode("utf-8", errors="ignore"))
+    if ext not in (".pptx", ".docx", ".doc", ".pdf"):
+        raise ValueError(f"Unsupported format: {filename}. Use .pptx/.docx/.doc/.pdf/.md")
 
     md = _get_markitdown()
 

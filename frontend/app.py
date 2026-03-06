@@ -352,8 +352,8 @@ def render_landing_page(module: str, slides: list):
             st.success(status_label)
 
         uploaded = st.file_uploader(
-            "Upload .pptx or .docx support documents",
-            type=["pptx", "docx", "doc"],
+            "Upload .pptx/.docx/.doc/.md support documents",
+            type=["pptx", "docx", "doc", "md"],
             accept_multiple_files=True,
             key=f"uploader_{module}",
             help="Files are scoped to this module and will not affect other modules.",
@@ -555,7 +555,7 @@ def render_controls_panel(slide_meta: dict, module: str):
     ):
         new_files = st.file_uploader(
             "Replace/add files for this module",
-            type=["pptx", "docx", "doc"],
+            type=["pptx", "docx", "doc", "md"],
             accept_multiple_files=True,
             key=f"slide_uploader_{slide_idx}",
             help="New upload replaces this module's current file set.",

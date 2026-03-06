@@ -1,14 +1,11 @@
-"""
-Markdown chunker and BM25 retriever.
-
-Splits converted markdown into paragraphs/sections then uses BM25 to
-return only the most query-relevant chunks, keeping LLM context tight.
-"""
+"""Chunk helpers and BM25 scoring utilities."""
 
 import math
 import re
 from collections import Counter
+from typing import Iterable
 
+from retriever.models import ChunkRecord
 # Chunk size bounds (characters)
 _CHUNK_MAX = 500
 _CHUNK_MIN = 80
@@ -107,26 +104,18 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
 
 
-def bm25_retrieve(chunks: list[str], query: str, top_k: int = 12) -> list[str]:
-    """
-    Return the top_k most query-relevant chunks using BM25.
-
-    If the query is empty or none of the chunks contain any query term,
-    falls back to returning the first top_k chunks so we never send nothing.
-    Returned chunks preserve original document order for coherence.
-    """
+def bm25_scores(chunks: list[str], query: str) -> list[float]:
+    """Compute BM25 scores aligned to input chunk order."""
     if not chunks:
         return []
-
     query_tokens = _tokenize(query)
     if not query_tokens:
-        return chunks[:top_k]
+        return [0.0 for _ in chunks]
 
     tokenized = [_tokenize(c) for c in chunks]
     n = len(tokenized)
-    avgdl = sum(len(t) for t in tokenized) / n
+    avgdl = sum(len(t) for t in tokenized) / max(n, 1)
 
-    # Corpus-level IDF for each query term
     idf: dict[str, float] = {}
     for term in set(query_tokens):
         df = sum(1 for t in tokenized if term in set(t))
@@ -143,6 +132,35 @@ def bm25_retrieve(chunks: list[str], query: str, top_k: int = 12) -> list[str]:
                 tf + _K1 * (1 - _B + _B * dl / max(avgdl, 1))
             )
         scores.append(score)
+    return scores
+
+
+def _to_text_list(chunks: Iterable[str | ChunkRecord]) -> list[str]:
+    text_list: list[str] = []
+    for chunk in chunks:
+        if isinstance(chunk, ChunkRecord):
+            text_list.append(chunk.text)
+        else:
+            text_list.append(str(chunk))
+    return text_list
+
+
+def bm25_retrieve(chunks: list[str], query: str, top_k: int = 12) -> list[str]:
+    """
+    Return the top_k most query-relevant chunks using BM25.
+
+    If the query is empty or none of the chunks contain any query term,
+    falls back to returning the first top_k chunks so we never send nothing.
+    Returned chunks preserve original document order for coherence.
+    """
+    if not chunks:
+        return []
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return chunks[:top_k]
+
+    scores = bm25_scores(chunks, query)
 
     ranked = sorted(range(n), key=lambda i: scores[i], reverse=True)
     top = ranked[:top_k]
@@ -154,3 +172,23 @@ def bm25_retrieve(chunks: list[str], query: str, top_k: int = 12) -> list[str]:
     # Preserve original order among selected chunks
     top_ordered = sorted(top)
     return [chunks[i] for i in top_ordered]
+
+
+def bm25_retrieve_records(
+    chunks: list[ChunkRecord],
+    query: str,
+    top_k: int = 12,
+) -> list[ChunkRecord]:
+    """Retrieve top chunk records with BM25 scoring over chunk.text."""
+    if not chunks:
+        return []
+    text_list = _to_text_list(chunks)
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return chunks[:top_k]
+    scores = bm25_scores(text_list, query)
+    ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
+    top = ranked[:top_k]
+    if all(scores[i] == 0.0 for i in top):
+        return chunks[:top_k]
+    return [chunks[i] for i in sorted(top)]

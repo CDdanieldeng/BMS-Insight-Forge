@@ -30,8 +30,31 @@ STRICT CLASSIFICATION & EXTRACTION PRINCIPLE
 ------------------------------------------------------------
 
 ROW DEFINITIONS (STRICT)
+- Demographics: STRICTLY age and gender only.
 
-- Demographics: age, gender only.
+  VALID demographic evidence:
+  - explicit age, age range, or life stage explicitly referring to physician age
+  - explicit gender / sex
+
+  INVALID for Demographics (must NOT be included):
+  - city tier
+  - hospital class / hospital type / institution type
+  - practice setting
+  - outpatient type / specialized outpatient attendance
+  - sub-specialty / PsO focus
+  - professional title (e.g., CD, VCD, DIC)
+  - years in practice / seniority / "more senior"
+  - patient volume
+  - treatment experience / knowledge level
+  - attitudes / beliefs / behaviors
+  - any percentage or profile statistic not explicitly about age or gender
+
+  HARD RULE:
+  If explicit age or gender is NOT stated for that segment, return exactly:
+  "Not found in provided materials."
+
+  Never use proxy profile information as demographics.
+  Never summarize general "Demographic Profiles" sections unless they explicitly contain age or gender.
 - Preferences:
   Explicit preferences regarding:
   1) Interaction style with pharmaceutical representatives (e.g., persuasion openness, detailing depth),
