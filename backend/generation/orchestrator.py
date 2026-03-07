@@ -692,7 +692,86 @@ def run_fill(
         segment_names: list[str] | None = None
         placeholder_cols = [c.strip() for c in columns if c.strip()]
         is_ms_slide3 = _is_messaging_strategy_slide3(module, indexes)
+        _is_cs = _normalize_label(module) == "customer segmentation"
 
+        # ── Customer Segmentation Agent path ──────────────────────────────────
+        # When the CS module has placeholder columns (first CS slide), delegate
+        # the entire segment-identification + table-generation pipeline to the
+        # CustomerSegmentationAgent.  Subsequent CS slides hit the cache path
+        # below and continue through the standard retrieval flow.
+        if _has_placeholder_columns(placeholder_cols) and not is_ms_slide3 and _is_cs:
+            with stage_scope("customer_segmentation_agent"):
+                if module in _segment_name_cache:
+                    # Cache hit: reuse segments, fall through to standard path.
+                    segment_names = _segment_name_cache[module]
+                    logger.info(
+                        "CS agent: reusing cached segment names module=%s names=%s",
+                        module,
+                        segment_names,
+                    )
+                else:
+                    from generation.customer_segmentation_agent import CustomerSegmentationAgent
+
+                    n_segments = len(placeholder_cols)
+                    logger.info(
+                        "CS agent: placeholder columns detected (%d), launching agent module=%s",
+                        n_segments,
+                        module,
+                    )
+                    full_content = _full_markdown_context(file_ids)
+                    fill_trace: dict[str, Any] | None = (
+                        {} if _should_write_fill_trace(slide_idx, module) else None
+                    )
+                    agent = CustomerSegmentationAgent()
+                    agent_result = agent.run(
+                        content=full_content,
+                        n_segments=n_segments,
+                        indexes=indexes,
+                        module=module,
+                        trace_capture=fill_trace,
+                    )
+                    segment_names = agent_result["segment_names"]
+                    table_data = agent_result["table_data"]
+                    _segment_name_cache[module] = segment_names
+                    logger.info(
+                        "CS agent: done module=%s maturity=%s segments=%s rows=%d",
+                        module,
+                        agent_result.get("maturity"),
+                        segment_names,
+                        len(table_data),
+                    )
+
+                    with stage_scope("trace_persist"):
+                        if fill_trace is not None:
+                            _write_fill_trace_file(
+                                slide_idx=slide_idx,
+                                module=module,
+                                system_prompt=str(fill_trace.get("system_prompt", "")),
+                                user_prompt=str(fill_trace.get("user_prompt", "")),
+                                llm_raw_response=str(fill_trace.get("llm_raw_response", "")),
+                            )
+
+                    logger.info(
+                        "run_fill done slide_idx=%d module=%s output_rows=%d column_headers=%s elapsed_ms=%d",
+                        slide_idx,
+                        module,
+                        len(table_data),
+                        segment_names,
+                        int((time.perf_counter() - start) * 1000),
+                    )
+
+                    with stage_scope("cache_update"):
+                        _slide_table_cache[slide_idx] = {
+                            "slide_idx": slide_idx,
+                            "module": module,
+                            "column_headers": segment_names,
+                            "indexes": indexes,
+                            "table_data": table_data,
+                        }
+
+                    return {"table_data": table_data, "column_headers": segment_names}
+
+        # ── Standard segment name resolution (non-CS or CS cache hit) ─────────
         if _has_placeholder_columns(placeholder_cols) and not is_ms_slide3:
             with stage_scope("segment_name_resolution"):
                 if module in _segment_name_cache:

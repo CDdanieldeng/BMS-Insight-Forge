@@ -55,20 +55,9 @@ ROW DEFINITIONS (STRICT)
 
   Never use proxy profile information as demographics.
   Never summarize general "Demographic Profiles" sections unless they explicitly contain age or gender.
-- Preferences:
+- Preferences: The way the HCPs like to be engaged with.
   Explicit preferences regarding:
-  1) Interaction style with pharmaceutical representatives (e.g., persuasion openness, detailing depth),
-  2) Preferred information channels (including offline interaction with pharma staff, MSL, sales reps, online interaction via WeChat/email, conferences, medical journals, third-party platforms),
-  3) Preferred evidence types to trigger prescription (e.g., clinical data, peer case sharing, real-world evidence),
-  4) Communication approach during professional interaction (if it reflects information engagement preference rather than patient behavior).
-
-  Include BOTH online and offline pharma-related engagement channels.
-  Include explicitly stated preferred information source or engagement method.
-  
-  Exclude:
-  - Patient communication style unless it directly reflects professional interaction preference.
-  - Treatment choice logic.
-  - Prescribing behavior itself.
+  - Channel preference such as Wechat, Conference, Visit, Face2Face Meeting, etc.
 - Attitudes/Beliefs: explicit mindset, product perceptions, treatment philosophy. Exclude observed prescribing behavior.
 - Capabilities: knowledge level, clinical experience, support staff, operational capability, clinical confidence. Exclude beliefs and environmental context.
 - Environment:
