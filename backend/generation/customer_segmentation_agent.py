@@ -550,34 +550,91 @@ class CustomerSegmentationAgent:
         indexes: list[str],
         module: str = "customer segmentation",
         trace_capture: dict[str, Any] | None = None,
+        file_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Run the full CS agent pipeline.
+
+        Checks the document-level facet cache first (keyed by file_ids).
+        If a mature file's segments are already cached, steps 1 and 2 are
+        skipped entirely — only the table generation LLM call is made.
 
         Returns:
             {
               "segment_names": list[str],   # 2 ≤ len ≤ n_segments
               "table_data":    list[list[str]],
               "maturity":      str,          # for observability
+              "facet_cache_hit": bool,       # True when steps 1+2 were skipped
             }
         """
         start = time.perf_counter()
         logger.info(
-            "CS agent run start module=%s n_segments=%d indexes=%d content_len=%d",
+            "CS agent run start module=%s n_segments=%d indexes=%d content_len=%d file_ids=%s",
             module,
             n_segments,
             len(indexes),
             len(content),
+            file_ids,
         )
 
-        # Step 1: classify maturity
-        maturity = self._classify(content, module)
+        facet_cache_hit = False
+        maturity = "totally_raw"
+        maturity_from_cache = False  # True when cache explicitly told us the maturity
+        segments: list[str] = []
 
-        # Step 2: get segment names based on maturity
-        if maturity == "mature":
-            segments = self._extract_segments(content, n_segments, module)
-        else:
-            segments = self._synthesize_segments(content, n_segments, module)
+        # ── Step 0: check doc-level facet cache ───────────────────────────
+        # Highest-maturity file wins. If a mature file already has segment
+        # names stored, skip the classify + extract LLM calls entirely.
+        if file_ids:
+            with stage_scope("cs_agent_doc_facet_lookup"):
+                try:
+                    from generation.doc_facet_cache import get_doc_facet_cache
+                    cache = get_doc_facet_cache()
+                    cached_maturity, cached_segments = cache.get_best_maturity(file_ids)
+                    # get_best_maturity returns "totally_raw" as the default when
+                    # no file has a facet card yet.  Only trust it when at least
+                    # one file_id actually has a stored entry.
+                    has_any_entry = any(cache.get(fid) is not None for fid in file_ids)
+                    if has_any_entry:
+                        maturity_from_cache = True
+                        if cached_maturity == "mature" and cached_segments:
+                            # Mature file with stored segment names → skip steps 1+2
+                            segments = cached_segments[:n_segments]
+                            maturity = "mature"
+                            facet_cache_hit = True
+                            logger.info(
+                                "CS agent: doc facet cache hit module=%s maturity=%s segments=%s",
+                                module,
+                                maturity,
+                                segments,
+                            )
+                        else:
+                            # Maturity known from cache but no segment names →
+                            # skip only step 1, still need to synthesize in step 2.
+                            maturity = cached_maturity
+                            logger.info(
+                                "CS agent: doc facet cache hit (maturity only) module=%s maturity=%s",
+                                module,
+                                maturity,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "CS agent: doc facet cache lookup failed module=%s err=%s; falling back to LLM classify",
+                        module,
+                        exc,
+                    )
+
+        # ── Step 1: classify maturity (skip if cache resolved it) ─────────
+        if not facet_cache_hit and not segments:
+            if not maturity_from_cache:
+                # Maturity not resolved from cache → run LLM classification
+                maturity = self._classify(content, module)
+
+            # ── Step 2: get segment names based on maturity ────────────────
+            if maturity == "mature":
+                segments = self._extract_segments(content, n_segments, module)
+            else:
+                segments = self._synthesize_segments(content, n_segments, module)
 
         # Enforce constraints: 2 ≤ count ≤ n_segments
         segments = [s for s in segments if s][:n_segments]
@@ -585,22 +642,24 @@ class CustomerSegmentationAgent:
             segments.append(f"Segment {len(segments) + 1}")
 
         logger.info(
-            "CS agent segments resolved module=%s maturity=%s segments=%s",
+            "CS agent segments resolved module=%s maturity=%s facet_cache_hit=%s segments=%s",
             module,
             maturity,
+            facet_cache_hit,
             segments,
         )
 
-        # Step 3: generate table content
+        # ── Step 3: generate table content (always required) ──────────────
         table_data = self._generate_table(
             content, segments, indexes, module, trace_capture=trace_capture
         )
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
-            "CS agent run done module=%s maturity=%s segments=%s rows=%d elapsed_ms=%d",
+            "CS agent run done module=%s maturity=%s facet_cache_hit=%s segments=%s rows=%d elapsed_ms=%d",
             module,
             maturity,
+            facet_cache_hit,
             segments,
             len(table_data),
             elapsed_ms,
@@ -610,4 +669,5 @@ class CustomerSegmentationAgent:
             "segment_names": segments,
             "table_data": table_data,
             "maturity": maturity,
+            "facet_cache_hit": facet_cache_hit,
         }

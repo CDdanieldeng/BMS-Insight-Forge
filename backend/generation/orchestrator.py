@@ -729,14 +729,16 @@ def run_fill(
                         indexes=indexes,
                         module=module,
                         trace_capture=fill_trace,
+                        file_ids=file_ids,
                     )
                     segment_names = agent_result["segment_names"]
                     table_data = agent_result["table_data"]
                     _segment_name_cache[module] = segment_names
                     logger.info(
-                        "CS agent: done module=%s maturity=%s segments=%s rows=%d",
+                        "CS agent: done module=%s maturity=%s facet_cache_hit=%s segments=%s rows=%d",
                         module,
                         agent_result.get("maturity"),
+                        agent_result.get("facet_cache_hit"),
                         segment_names,
                         len(table_data),
                     )
