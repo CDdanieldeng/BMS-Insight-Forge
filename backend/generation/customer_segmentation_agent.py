@@ -23,12 +23,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from shared.logging_config import setup_logging
-from generation.stage_metrics import stage_scope
+from generation.stage_metrics import record_llm_usage, stage_scope
 
 logger = setup_logging("generation")
 
@@ -37,6 +36,42 @@ MIN_SEGMENTS = 2
 _CS_AGENT_TRACE_DIR = (
     Path(__file__).resolve().parents[1] / "logs" / "cs_agent_llm"
 )
+
+# ---------------------------------------------------------------------------
+# Token accounting helper for LangChain responses
+# ---------------------------------------------------------------------------
+
+def _record_langchain_usage(msg: Any, elapsed_ms: int) -> None:
+    """Extract token counts from a LangChain AIMessage and forward to stage metrics."""
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    model = (
+        os.getenv("QWEN_MODEL", "qwen-max")
+        if provider == "qwen"
+        else os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    )
+    prompt_tokens = completion_tokens = total_tokens = None
+
+    usage_meta = getattr(msg, "usage_metadata", None)
+    if isinstance(usage_meta, dict):
+        prompt_tokens = usage_meta.get("input_tokens")
+        completion_tokens = usage_meta.get("output_tokens")
+        total_tokens = usage_meta.get("total_tokens")
+
+    if prompt_tokens is None:
+        token_usage = (getattr(msg, "response_metadata", {}) or {}).get("token_usage") or {}
+        prompt_tokens = token_usage.get("prompt_tokens")
+        completion_tokens = token_usage.get("completion_tokens")
+        total_tokens = token_usage.get("total_tokens")
+
+    record_llm_usage(
+        provider=provider,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        elapsed_ms=elapsed_ms,
+    )
+
 
 # ---------------------------------------------------------------------------
 # LLM factory
@@ -220,6 +255,68 @@ Identify the HCP segments now:"""
 # and the feedback path.
 
 # ---------------------------------------------------------------------------
+# Table repair helper
+# ---------------------------------------------------------------------------
+
+def _repair_table(data: list, segments: list[str]) -> list[list[str]]:
+    """Repair LLM output where segment values were merged into fewer cells.
+
+    The LLM sometimes outputs rows like:
+      ["Pioneer: x. Considerate Performer: y. Safe Player: z. Traditionalist: w.", ...]
+    instead of the correct:
+      ["x", "y", "z", "w"]
+
+    Two failure modes are handled:
+    1. Wrong column count  — len(row) != len(segments)
+    2. Multi-segment cells — a single cell contains content for more than one segment
+       (detected by finding >1 known segment-name prefix inside one cell)
+
+    Repair strategy: flatten all cells in the row into one text blob, split on
+    "<SegmentName>:" boundaries, and redistribute one chunk per segment column.
+    """
+    import re
+
+    n = len(segments)
+    split_pattern = re.compile(
+        r"(?<!\w)(" + "|".join(re.escape(s) for s in segments) + r")\s*:\s*"
+    )
+
+    def _needs_repair(row: list) -> bool:
+        if len(row) != n:
+            return True
+        for cell in row:
+            found = split_pattern.findall(str(cell))
+            if len(found) > 1:
+                return True
+        return False
+
+    def _split_row(row: list) -> list[str]:
+        blob = " ".join(str(c) for c in row)
+        parts = split_pattern.split(blob)
+        # parts = [pre_text, seg_name, seg_content, seg_name, seg_content, ...]
+        seg_map: dict[str, str] = {}
+        i = 1
+        while i < len(parts) - 1:
+            name = parts[i].strip()
+            content = parts[i + 1].strip().strip(".")
+            if name in set(segments):
+                seg_map[name] = content
+            i += 2
+        return [seg_map.get(seg, "Not found in provided materials.") for seg in segments]
+
+    repaired: list[list[str]] = []
+    for row in data:
+        if not isinstance(row, list):
+            repaired.append(["Not found in provided materials."] * n)
+            continue
+        if _needs_repair(row):
+            repaired.append(_split_row(row))
+        else:
+            repaired.append([str(c) for c in row])
+    return repaired
+
+
+# ---------------------------------------------------------------------------
 # Trace writer
 # ---------------------------------------------------------------------------
 
@@ -293,10 +390,38 @@ class CustomerSegmentationAgent:
             ("human", _SYNTHESIZE_USER),
         ])
 
-        # Chains for each step using LCEL pipe operator
-        self._classify_chain = self._classify_prompt | self._classify_llm | StrOutputParser()
-        self._extract_chain = self._extract_prompt | self._segment_llm | StrOutputParser()
-        self._synthesize_chain = self._synthesize_prompt | self._segment_llm | StrOutputParser()
+    # ------------------------------------------------------------------
+    # Retrieval helper
+    # ------------------------------------------------------------------
+
+    def _retrieve_context(
+        self,
+        file_ids: list[str],
+        query: str,
+        table_structure: dict[str, Any] | None = None,
+        module: str = "customer segmentation",
+    ) -> str:
+        """Return relevant context for the given query using the evidence pipeline."""
+        from generation.evidence_pipeline import run_evidence_pipeline
+        from generation.pipeline_config import load_pipeline_config
+
+        config = load_pipeline_config()
+        result = run_evidence_pipeline(
+            file_ids=file_ids,
+            module=module,
+            table_structure=table_structure or {},
+            seed_query=query,
+            config=config,
+        )
+        logger.info(
+            "CS agent: retrieved context file_ids=%d query_len=%d content_len=%d degraded=%s",
+            len(file_ids),
+            len(query),
+            len(result.context_text),
+            result.degraded,
+        )
+        return result.context_text
+
 
     # ------------------------------------------------------------------
     # Step helpers
@@ -308,7 +433,9 @@ class CustomerSegmentationAgent:
             raw = ""
             try:
                 start = time.perf_counter()
-                raw = self._classify_chain.invoke({"content": content})
+                _msg = (self._classify_prompt | self._classify_llm).invoke({"content": content})
+                _record_langchain_usage(_msg, elapsed_ms=int((time.perf_counter() - start) * 1000))
+                raw = _msg.content if hasattr(_msg, "content") else str(_msg)
                 _write_agent_trace(
                     step="classify_maturity",
                     module=module,
@@ -366,11 +493,13 @@ class CustomerSegmentationAgent:
             raw = ""
             try:
                 start = time.perf_counter()
-                raw = self._extract_chain.invoke({
+                _msg = (self._extract_prompt | self._segment_llm).invoke({
                     "content": content,
                     "n_segments": n_segments,
                     "min_segments": MIN_SEGMENTS,
                 })
+                _record_langchain_usage(_msg, elapsed_ms=int((time.perf_counter() - start) * 1000))
+                raw = _msg.content if hasattr(_msg, "content") else str(_msg)
                 _write_agent_trace(
                     step="extract_segments",
                     module=module,
@@ -408,11 +537,13 @@ class CustomerSegmentationAgent:
             raw = ""
             try:
                 start = time.perf_counter()
-                raw = self._synthesize_chain.invoke({
+                _msg = (self._synthesize_prompt | self._segment_llm).invoke({
                     "content": content,
                     "n_segments": n_segments,
                     "min_segments": MIN_SEGMENTS,
                 })
+                _record_langchain_usage(_msg, elapsed_ms=int((time.perf_counter() - start) * 1000))
+                raw = _msg.content if hasattr(_msg, "content") else str(_msg)
                 _write_agent_trace(
                     step="synthesize_segments",
                     module=module,
@@ -444,16 +575,35 @@ class CustomerSegmentationAgent:
 
     def _generate_table(
         self,
-        content: str,
+        file_ids: list[str],
         segments: list[str],
         indexes: list[str],
         module: str,
         trace_capture: dict[str, Any] | None = None,
     ) -> list[list[str]]:
-        """Step 3: generate slide table content using slide1 prompt rules."""
+        """Step 3: generate slide table content using slide1 prompt rules.
+
+        Retrieves relevant context via the evidence pipeline (facet-gated
+        hybrid retrieval) rather than dumping all file content, keeping the
+        prompt within the model's token limit regardless of how many files
+        are uploaded.
+        """
         from generation.slide_prompts.customer_segmentation.slide1 import build_prompts
 
         with stage_scope("cs_agent_generate_table"):
+            # Build a targeted retrieval query from the known segments and row labels.
+            query = (
+                f"HCP customer segment {' '.join(segments[:4])} "
+                f"{' '.join(indexes[:6])}"
+            )
+            table_structure: dict[str, Any] = {
+                "columns": [""] + segments,
+                "indexes": indexes,
+            }
+            content = self._retrieve_context(
+                file_ids, query, table_structure=table_structure, module=module
+            )
+
             if not content.strip():
                 logger.warning(
                     "CS agent: empty context for table generation module=%s rows=%d cols=%d",
@@ -478,12 +628,14 @@ class CustomerSegmentationAgent:
                 ("human", "{user}"),
             ])
             table_llm = _build_langchain_llm(max_tokens=_max_tokens)
-            table_chain = table_prompt | table_llm | StrOutputParser()
+            table_chain = table_prompt | table_llm
 
             raw = ""
             try:
                 start = time.perf_counter()
-                raw = table_chain.invoke({"system": system_prompt, "user": user_prompt})
+                _msg = table_chain.invoke({"system": system_prompt, "user": user_prompt})
+                _record_langchain_usage(_msg, elapsed_ms=int((time.perf_counter() - start) * 1000))
+                raw = _msg.content if hasattr(_msg, "content") else str(_msg)
 
                 if trace_capture is not None:
                     trace_capture["llm_raw_response"] = raw
@@ -514,12 +666,7 @@ class CustomerSegmentationAgent:
                 if not isinstance(data, list):
                     raise ValueError("Expected list of lists from table generation")
 
-                result: list[list[str]] = []
-                for row in data:
-                    if isinstance(row, list):
-                        result.append([str(c) for c in row])
-                    else:
-                        result.append([str(row)])
+                result = _repair_table(data, segments)
 
                 logger.info(
                     "CS agent table done module=%s rows=%d cols=%d elapsed_ms=%d",
@@ -545,19 +692,23 @@ class CustomerSegmentationAgent:
 
     def run(
         self,
-        content: str,
+        file_ids: list[str],
         n_segments: int,
         indexes: list[str],
         module: str = "customer segmentation",
         trace_capture: dict[str, Any] | None = None,
-        file_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Run the full CS agent pipeline.
 
-        Checks the document-level facet cache first (keyed by file_ids).
-        If a mature file's segments are already cached, steps 1 and 2 are
-        skipped entirely — only the table generation LLM call is made.
+        All three steps use targeted retrieval via the evidence pipeline rather
+        than receiving a pre-built full-content dump.  This keeps every LLM call
+        within the model's token limit regardless of how many files are uploaded.
+
+        Step 0: doc-level facet cache lookup — skips steps 1+2 for mature files.
+        Step 1: classify maturity (only on cache miss, uses broad retrieval).
+        Step 2: extract/synthesize segment names (uses targeted retrieval).
+        Step 3: generate table (always, uses segment+row-label targeted retrieval).
 
         Returns:
             {
@@ -569,17 +720,16 @@ class CustomerSegmentationAgent:
         """
         start = time.perf_counter()
         logger.info(
-            "CS agent run start module=%s n_segments=%d indexes=%d content_len=%d file_ids=%s",
+            "CS agent run start module=%s n_segments=%d indexes=%d file_ids=%s",
             module,
             n_segments,
             len(indexes),
-            len(content),
             file_ids,
         )
 
         facet_cache_hit = False
         maturity = "totally_raw"
-        maturity_from_cache = False  # True when cache explicitly told us the maturity
+        maturity_from_cache = False
         segments: list[str] = []
 
         # ── Step 0: check doc-level facet cache ───────────────────────────
@@ -591,14 +741,10 @@ class CustomerSegmentationAgent:
                     from generation.doc_facet_cache import get_doc_facet_cache
                     cache = get_doc_facet_cache()
                     cached_maturity, cached_segments = cache.get_best_maturity(file_ids)
-                    # get_best_maturity returns "totally_raw" as the default when
-                    # no file has a facet card yet.  Only trust it when at least
-                    # one file_id actually has a stored entry.
                     has_any_entry = any(cache.get(fid) is not None for fid in file_ids)
                     if has_any_entry:
                         maturity_from_cache = True
                         if cached_maturity == "mature" and cached_segments:
-                            # Mature file with stored segment names → skip steps 1+2
                             segments = cached_segments[:n_segments]
                             maturity = "mature"
                             facet_cache_hit = True
@@ -609,8 +755,6 @@ class CustomerSegmentationAgent:
                                 segments,
                             )
                         else:
-                            # Maturity known from cache but no segment names →
-                            # skip only step 1, still need to synthesize in step 2.
                             maturity = cached_maturity
                             logger.info(
                                 "CS agent: doc facet cache hit (maturity only) module=%s maturity=%s",
@@ -624,17 +768,31 @@ class CustomerSegmentationAgent:
                         exc,
                     )
 
-        # ── Step 1: classify maturity (skip if cache resolved it) ─────────
+        # ── Steps 1 + 2: classify + segment names (skip when cache resolved both) ──
         if not facet_cache_hit and not segments:
             if not maturity_from_cache:
-                # Maturity not resolved from cache → run LLM classification
-                maturity = self._classify(content, module)
+                # Retrieve a broad sample sufficient for maturity classification.
+                classify_content = self._retrieve_context(
+                    file_ids,
+                    "HCP customer segmentation analysis segment names maturity",
+                    module=module,
+                )
+                maturity = self._classify(classify_content, module)
 
-            # ── Step 2: get segment names based on maturity ────────────────
             if maturity == "mature":
-                segments = self._extract_segments(content, n_segments, module)
+                extract_content = self._retrieve_context(
+                    file_ids,
+                    "HCP segment names customer segmentation",
+                    module=module,
+                )
+                segments = self._extract_segments(extract_content, n_segments, module)
             else:
-                segments = self._synthesize_segments(content, n_segments, module)
+                synth_content = self._retrieve_context(
+                    file_ids,
+                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
+                    module=module,
+                )
+                segments = self._synthesize_segments(synth_content, n_segments, module)
 
         # Enforce constraints: 2 ≤ count ≤ n_segments
         segments = [s for s in segments if s][:n_segments]
@@ -650,8 +808,9 @@ class CustomerSegmentationAgent:
         )
 
         # ── Step 3: generate table content (always required) ──────────────
+        # _generate_table performs its own targeted retrieval internally.
         table_data = self._generate_table(
-            content, segments, indexes, module, trace_capture=trace_capture
+            file_ids, segments, indexes, module, trace_capture=trace_capture
         )
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)

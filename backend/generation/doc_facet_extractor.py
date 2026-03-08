@@ -18,6 +18,7 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 from generation.llm_client import complete
+from generation.stage_metrics import run_scope, stage_scope
 
 logger = setup_logging("generation")
 
@@ -96,6 +97,18 @@ def extract_document_facet(
 
     Returns a facet dict ready to store in DocumentFacetCache.
     """
+    with run_scope(
+        operation="doc_facet_extraction",
+        metadata={"file_id": file_id, "filename": filename},
+    ):
+        return _extract_document_facet_inner(file_id=file_id, md_text=md_text, filename=filename)
+
+
+def _extract_document_facet_inner(
+    file_id: str,
+    md_text: str,
+    filename: str,
+) -> dict[str, Any]:
     facet: dict[str, Any] = {
         "file_id": file_id,
         "filename": filename,
@@ -106,93 +119,95 @@ def extract_document_facet(
     # ── Step 1: classify maturity ─────────────────────────────────────────
     classify_sample = _sample_content(md_text, _CLASSIFY_MAX_CHARS)
     raw_classify = ""
-    try:
-        start = time.perf_counter()
-        raw_classify = complete(
-            _CLASSIFY_SYSTEM,
-            _CLASSIFY_USER.format(content=classify_sample),
-            max_tokens=200,
-        ).strip()
-
-        cleaned = raw_classify
-        if "```" in cleaned:
-            m = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned)
-            if m:
-                cleaned = m.group(1)
-
-        parsed = json.loads(cleaned)
-        maturity = str(parsed.get("maturity", "")).strip().lower()
-        if maturity not in {"totally_raw", "semi_raw", "mature"}:
-            logger.warning(
-                "Doc facet: unexpected maturity '%s' for file_id=%s, defaulting to semi_raw",
-                maturity,
-                file_id,
-            )
-            maturity = "semi_raw"
-
-        facet["maturity"] = maturity
-        logger.info(
-            "Doc facet classify done file_id=%s filename=%s maturity=%s reasoning=%s elapsed_ms=%d",
-            file_id,
-            filename,
-            maturity,
-            str(parsed.get("reasoning", ""))[:200],
-            int((time.perf_counter() - start) * 1000),
-        )
-    except Exception as exc:
-        logger.warning(
-            "Doc facet classify failed file_id=%s filename=%s err=%s raw=%s",
-            file_id,
-            filename,
-            exc,
-            raw_classify[:300],
-        )
-        # Default to semi_raw so the CS agent synthesizes rather than blindly
-        # tries to extract from a potentially raw file.
-        facet["maturity"] = "semi_raw"
-
-    # ── Step 2: extract segment names (mature only) ───────────────────────
-    if facet["maturity"] == "mature":
-        extract_sample = _sample_content(md_text, _EXTRACT_MAX_CHARS)
-        raw_extract = ""
+    with stage_scope("doc_facet_classify"):
         try:
             start = time.perf_counter()
-            raw_extract = complete(
-                _EXTRACT_SYSTEM,
-                _EXTRACT_USER.format(content=extract_sample),
-                max_tokens=300,
+            raw_classify = complete(
+                _CLASSIFY_SYSTEM,
+                _CLASSIFY_USER.format(content=classify_sample),
+                max_tokens=200,
             ).strip()
 
-            cleaned = raw_extract
+            cleaned = raw_classify
             if "```" in cleaned:
                 m = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned)
                 if m:
                     cleaned = m.group(1)
 
-            names = json.loads(cleaned)
-            if not isinstance(names, list):
-                raise ValueError("Expected a JSON list")
+            parsed = json.loads(cleaned)
+            maturity = str(parsed.get("maturity", "")).strip().lower()
+            if maturity not in {"totally_raw", "semi_raw", "mature"}:
+                logger.warning(
+                    "Doc facet: unexpected maturity '%s' for file_id=%s, defaulting to semi_raw",
+                    maturity,
+                    file_id,
+                )
+                maturity = "semi_raw"
 
-            names = [str(n).strip() for n in names if str(n).strip()]
-            facet["segment_names"] = names
+            facet["maturity"] = maturity
             logger.info(
-                "Doc facet extract done file_id=%s filename=%s segments=%s elapsed_ms=%d",
+                "Doc facet classify done file_id=%s filename=%s maturity=%s reasoning=%s elapsed_ms=%d",
                 file_id,
                 filename,
-                names,
+                maturity,
+                str(parsed.get("reasoning", ""))[:200],
                 int((time.perf_counter() - start) * 1000),
             )
         except Exception as exc:
             logger.warning(
-                "Doc facet segment extraction failed file_id=%s filename=%s err=%s raw=%s",
+                "Doc facet classify failed file_id=%s filename=%s err=%s raw=%s",
                 file_id,
                 filename,
                 exc,
-                raw_extract[:300],
+                raw_classify[:300],
             )
-            # If extraction fails for a mature file, downgrade to semi_raw so the
-            # agent synthesizes rather than returning an empty segment list.
+            # Default to semi_raw so the CS agent synthesizes rather than blindly
+            # tries to extract from a potentially raw file.
             facet["maturity"] = "semi_raw"
-            facet["segment_names"] = []
+
+    # ── Step 2: extract segment names (mature only) ───────────────────────
+    if facet["maturity"] == "mature":
+        extract_sample = _sample_content(md_text, _EXTRACT_MAX_CHARS)
+        raw_extract = ""
+        with stage_scope("doc_facet_extract_segments"):
+            try:
+                start = time.perf_counter()
+                raw_extract = complete(
+                    _EXTRACT_SYSTEM,
+                    _EXTRACT_USER.format(content=extract_sample),
+                    max_tokens=300,
+                ).strip()
+
+                cleaned = raw_extract
+                if "```" in cleaned:
+                    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned)
+                    if m:
+                        cleaned = m.group(1)
+
+                names = json.loads(cleaned)
+                if not isinstance(names, list):
+                    raise ValueError("Expected a JSON list")
+
+                names = [str(n).strip() for n in names if str(n).strip()]
+                facet["segment_names"] = names
+                logger.info(
+                    "Doc facet extract done file_id=%s filename=%s segments=%s elapsed_ms=%d",
+                    file_id,
+                    filename,
+                    names,
+                    int((time.perf_counter() - start) * 1000),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Doc facet segment extraction failed file_id=%s filename=%s err=%s raw=%s",
+                    file_id,
+                    filename,
+                    exc,
+                    raw_extract[:300],
+                )
+                # If extraction fails for a mature file, downgrade to semi_raw so the
+                # agent synthesizes rather than returning an empty segment list.
+                facet["maturity"] = "semi_raw"
+                facet["segment_names"] = []
 
     return facet

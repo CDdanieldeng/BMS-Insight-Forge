@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -42,6 +43,7 @@ class StageRun:
     started_at_epoch_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     _started_perf: float = field(default_factory=time.perf_counter)
     _stages: dict[str, StageStat] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
     status: str = "ok"
     error: str = ""
 
@@ -76,12 +78,13 @@ class StageRun:
     ) -> None:
         _ = provider, model  # reserved for future fine-grained logs
         stage_name = _CURRENT_STAGE.get()
-        stat = self._stage(stage_name)
-        stat.llm_calls += 1
-        stat.llm_elapsed_ms_total += max(int(elapsed_ms or 0), 0)
-        stat.prompt_tokens_total += int(prompt_tokens or 0)
-        stat.completion_tokens_total += int(completion_tokens or 0)
-        stat.total_tokens_total += int(total_tokens or 0)
+        with self._lock:
+            stat = self._stage(stage_name)
+            stat.llm_calls += 1
+            stat.llm_elapsed_ms_total += max(int(elapsed_ms or 0), 0)
+            stat.prompt_tokens_total += int(prompt_tokens or 0)
+            stat.completion_tokens_total += int(completion_tokens or 0)
+            stat.total_tokens_total += int(total_tokens or 0)
 
     def mark_failed(self, exc: Exception) -> None:
         self.status = "failed"

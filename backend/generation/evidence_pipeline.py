@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -220,9 +221,12 @@ def run_evidence_pipeline(
             if batch_calls > 0 and worker_count > 1:
                 # Run LLM facet extraction concurrently, then update cache serially
                 # to avoid race conditions in JSONL append writes.
+                # Copy the current context so ContextVar values (run_scope, stage_scope)
+                # are visible inside each worker thread.
+                _ctx = contextvars.copy_context()
                 with ThreadPoolExecutor(max_workers=worker_count) as executor:
                     future_to_batch = {
-                        executor.submit(extract_facets_batch, batch): batch for batch in batches
+                        executor.submit(_ctx.run, extract_facets_batch, batch): batch for batch in batches
                     }
                     for future in as_completed(future_to_batch):
                         batch = future_to_batch[future]

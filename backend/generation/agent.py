@@ -10,6 +10,7 @@ from generation.llm_client import complete
 from generation.orchestrator import _get_context_content
 from generation.query_enhancer import enhance_query
 from generation.slide_prompts import get_prompt_builder
+from generation.stage_metrics import run_scope, stage_scope
 
 logger = setup_logging("generation")
 
@@ -109,6 +110,31 @@ def apply_feedback(
     2) slide-specific prompt rules
     3) user feedback + current table as reference
     """
+    with run_scope(
+        operation="apply_feedback",
+        module=module,
+        metadata={"file_ids_count": len(file_ids)},
+    ):
+        return _apply_feedback_inner(
+            module=module,
+            current_content=current_content,
+            table_structure=table_structure,
+            user_message=user_message,
+            file_ids=file_ids,
+            current_column_headers=current_column_headers,
+            conversation_history=conversation_history,
+        )
+
+
+def _apply_feedback_inner(
+    module: str,
+    current_content: list[list[str]],
+    table_structure: dict[str, Any],
+    user_message: str,
+    file_ids: list[str],
+    current_column_headers: list[str] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     columns = table_structure.get("columns", [])
     indexes = table_structure.get("indexes", [])
     existing_headers = (
@@ -126,14 +152,16 @@ def apply_feedback(
         while len(existing_headers) < current_width:
             existing_headers.append(f"Segment {len(existing_headers) + 1}")
 
-    need_uploaded_context = _feedback_needs_uploaded_context(
-        module=module,
-        user_message=user_message,
-        current_content=current_content,
-        current_headers=existing_headers,
-    )
+    with stage_scope("feedback_routing"):
+        need_uploaded_context = _feedback_needs_uploaded_context(
+            module=module,
+            user_message=user_message,
+            current_content=current_content,
+            current_headers=existing_headers,
+        )
 
     if need_uploaded_context and file_ids:
+        # enhance_query uses stage_scope("query_enhancement") internally
         query = f"{enhance_query(module, table_structure)}; user feedback: {user_message}".strip("; ")
         context = _get_context_content(
             file_ids,
@@ -213,66 +241,67 @@ Rules:
 Return the JSON object now:"""
 
     try:
-        raw = complete(system, user, max_tokens=2200)
-        raw = raw.strip()
-        if "```" in raw:
-            match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
-            if match:
-                raw = match.group(1)
+        with stage_scope("feedback_apply"):
+            raw = complete(system, user, max_tokens=2200)
+            raw = raw.strip()
+            if "```" in raw:
+                match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+                if match:
+                    raw = match.group(1)
 
-        data = json.loads(raw)
-        if isinstance(data, list):
-            # Backward compatibility when model returns only table_data list.
-            parsed_headers = existing_headers
-            parsed_table = data
-        elif isinstance(data, dict):
-            parsed_headers = data.get("column_headers", existing_headers)
-            parsed_table = data.get("table_data", [])
-            assistant_message = str(data.get("assistant_message", "")).strip()
-        else:
-            raise ValueError("Expected JSON object or JSON array")
-        if isinstance(data, list):
-            assistant_message = ""
+            data = json.loads(raw)
+            if isinstance(data, list):
+                # Backward compatibility when model returns only table_data list.
+                parsed_headers = existing_headers
+                parsed_table = data
+            elif isinstance(data, dict):
+                parsed_headers = data.get("column_headers", existing_headers)
+                parsed_table = data.get("table_data", [])
+                assistant_message = str(data.get("assistant_message", "")).strip()
+            else:
+                raise ValueError("Expected JSON object or JSON array")
+            if isinstance(data, list):
+                assistant_message = ""
 
-        normalized_headers = [str(h).strip() for h in parsed_headers if str(h).strip()]
-        if len(normalized_headers) != len(existing_headers):
-            logger.warning(
-                "Header count mismatch in feedback response expected=%d got=%d; keeping existing headers",
-                len(existing_headers),
+            normalized_headers = [str(h).strip() for h in parsed_headers if str(h).strip()]
+            if len(normalized_headers) != len(existing_headers):
+                logger.warning(
+                    "Header count mismatch in feedback response expected=%d got=%d; keeping existing headers",
+                    len(existing_headers),
+                    len(normalized_headers),
+                )
+                normalized_headers = existing_headers
+
+            result: list[list[str]] = []
+            for row in parsed_table[: len(indexes)]:
+                if isinstance(row, list):
+                    normalized_row = [str(c) for c in row[: len(normalized_headers)]]
+                else:
+                    normalized_row = [str(row)]
+                while len(normalized_row) < len(normalized_headers):
+                    normalized_row.append("")
+                result.append(normalized_row)
+
+            while len(result) < len(indexes):
+                result.append([""] * len(normalized_headers))
+
+            logger.info(
+                "Agent applied feedback module=%s rows=%d cols=%d",
+                module,
+                len(result),
                 len(normalized_headers),
             )
-            normalized_headers = existing_headers
-
-        result: list[list[str]] = []
-        for row in parsed_table[: len(indexes)]:
-            if isinstance(row, list):
-                normalized_row = [str(c) for c in row[: len(normalized_headers)]]
-            else:
-                normalized_row = [str(row)]
-            while len(normalized_row) < len(normalized_headers):
-                normalized_row.append("")
-            result.append(normalized_row)
-
-        while len(result) < len(indexes):
-            result.append([""] * len(normalized_headers))
-
-        logger.info(
-            "Agent applied feedback module=%s rows=%d cols=%d",
-            module,
-            len(result),
-            len(normalized_headers),
-        )
-        assistant_message = _concise_assistant_message(assistant_message)
-        if not assistant_message:
-            assistant_message = (
-                "Thanks for your feedback. I have updated this slide while keeping "
-                "the original table structure unchanged."
-            )
-        return {
-            "table_data": result,
-            "column_headers": normalized_headers,
-            "assistant_message": assistant_message,
-        }
+            assistant_message = _concise_assistant_message(assistant_message)
+            if not assistant_message:
+                assistant_message = (
+                    "Thanks for your feedback. I have updated this slide while keeping "
+                    "the original table structure unchanged."
+                )
+            return {
+                "table_data": result,
+                "column_headers": normalized_headers,
+                "assistant_message": assistant_message,
+            }
     except Exception as e:
         logger.exception("Agent feedback failed: %s", e)
         raise
@@ -293,6 +322,31 @@ def answer_question(
     This mode behaves like "ask-only": it uses uploaded files + current
     table snapshot to provide an answer, and never returns updated table data.
     """
+    with run_scope(
+        operation="answer_question",
+        module=module,
+        metadata={"file_ids_count": len(file_ids)},
+    ):
+        return _answer_question_inner(
+            module=module,
+            current_content=current_content,
+            table_structure=table_structure,
+            user_message=user_message,
+            file_ids=file_ids,
+            current_column_headers=current_column_headers,
+            conversation_history=conversation_history,
+        )
+
+
+def _answer_question_inner(
+    module: str,
+    current_content: list[list[str]],
+    table_structure: dict[str, Any],
+    user_message: str,
+    file_ids: list[str],
+    current_column_headers: list[str] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     columns = table_structure.get("columns", [])
     indexes = table_structure.get("indexes", [])
     existing_headers = (
@@ -309,6 +363,7 @@ def answer_question(
         while len(existing_headers) < current_width:
             existing_headers.append(f"Segment {len(existing_headers) + 1}")
 
+    # enhance_query uses stage_scope("query_enhancement") internally
     query = f"{enhance_query(module, table_structure)}; user question: {user_message}".strip("; ")
     context = (
         _get_context_content(
@@ -358,16 +413,17 @@ User question:
 Answer directly in plain text."""
 
     try:
-        raw = complete(system, user, max_tokens=900)
-        assistant_message = " ".join(str(raw or "").strip().split())
-        if len(assistant_message) > 800:
-            assistant_message = assistant_message[:797].rstrip() + "..."
-        if not assistant_message:
-            assistant_message = (
-                "I could not generate a reliable answer right now. "
-                "Please try rephrasing the question."
-            )
-        return {"assistant_message": assistant_message}
+        with stage_scope("answer_generation"):
+            raw = complete(system, user, max_tokens=900)
+            assistant_message = " ".join(str(raw or "").strip().split())
+            if len(assistant_message) > 800:
+                assistant_message = assistant_message[:797].rstrip() + "..."
+            if not assistant_message:
+                assistant_message = (
+                    "I could not generate a reliable answer right now. "
+                    "Please try rephrasing the question."
+                )
+            return {"assistant_message": assistant_message}
     except Exception as e:
         logger.exception("Ask-mode answer failed: %s", e)
         raise

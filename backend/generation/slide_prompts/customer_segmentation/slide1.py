@@ -126,11 +126,23 @@ Return ONLY a valid JSON array of arrays.
 - Outer array: one inner array per row label, in this exact order: {indexes}
 - Inner array: one string value per segment column, in this exact order: {segment_names}
 - Total rows: {n_rows}
-- Values per row: {n_segments}
+- Values per row: {n_segments} (EXACTLY {n_segments} strings per inner array, no more, no less)
 - No explanations, no markdown, no extra keys, no trailing commas.
 
+CRITICAL CELL RULES:
+- Each cell string describes ONLY the single segment at that column position.
+- Do NOT prefix the cell value with the segment name (e.g., "Pioneer: ..." inside a cell is WRONG).
+- Do NOT merge two or more segments into one cell string.
+- The column order determines which segment a cell belongs to — you do not need to name the segment inside the cell.
+
+WRONG — all segments merged into one cell:
+[["Pioneer: x. Considerate Performer: y. Safe Player: z. Traditionalist: w.", ...], ...]
+
+CORRECT — one segment's content per cell, no segment-name prefix:
+[["x", "y", "z", "w"], ...]
+
 Example structure (2 rows, 2 segments):
-[["value_row1_seg1", "value_row1_seg2"], ["value_row2_seg1", "value_row2_seg2"]]"""
+[["value_for_seg1_row1", "value_for_seg2_row1"], ["value_for_seg1_row2", "value_for_seg2_row2"]]"""
 
     user = f"""Segments to populate (columns): {segments_list}
 

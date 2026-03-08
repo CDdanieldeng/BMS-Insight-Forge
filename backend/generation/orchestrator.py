@@ -718,18 +718,16 @@ def run_fill(
                         n_segments,
                         module,
                     )
-                    full_content = _full_markdown_context(file_ids)
                     fill_trace: dict[str, Any] | None = (
                         {} if _should_write_fill_trace(slide_idx, module) else None
                     )
                     agent = CustomerSegmentationAgent()
                     agent_result = agent.run(
-                        content=full_content,
+                        file_ids=file_ids,
                         n_segments=n_segments,
                         indexes=indexes,
                         module=module,
                         trace_capture=fill_trace,
-                        file_ids=file_ids,
                     )
                     segment_names = agent_result["segment_names"]
                     table_data = agent_result["table_data"]
