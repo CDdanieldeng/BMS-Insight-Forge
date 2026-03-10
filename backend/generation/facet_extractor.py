@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from shared.logging_config import setup_logging
 from typing import Any
 
 from generation.llm_client import complete
@@ -12,6 +13,7 @@ from retriever.models import ChunkRecord
 _CHANNEL_TERMS = ["wechat", "weixin", "journal", "publication", "conference", "congress", "rep"]
 _TOPIC_TERMS = ["preferences", "environment", "channels", "demographics", "volume"]
 
+logger = setup_logging("chunk_facet_extractor")
 
 def _rule_facet(chunk: ChunkRecord) -> dict[str, Any]:
     text = (chunk.text or "").lower()
@@ -70,6 +72,7 @@ def extract_facet(chunk: ChunkRecord) -> dict[str, Any]:
             raise ValueError("facet payload not dict")
         return _normalize_facet(data, chunk)
     except Exception:
+        logger.exception("Facet extractor: error extracting facet for chunk=%s", chunk.chunk_id)
         return _rule_facet(chunk)
 
 
