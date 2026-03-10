@@ -31,11 +31,12 @@ def _schedule_doc_facet(file_id: str, md_text: str, filename: str) -> None:
             facet = extract_document_facet(file_id, md_text, filename)
             get_doc_facet_cache().set(file_id, facet)
             logger.info(
-                "Doc facet stored file_id=%s filename=%s maturity=%s segments=%s",
+                "Doc facet stored file_id=%s filename=%s maturity=%s topic=%s summary=%s",
                 file_id,
                 filename,
                 facet.get("maturity"),
-                facet.get("segment_names"),
+                facet.get("topic"),
+                (facet.get("summary") or "")[:80],
             )
         except Exception as exc:
             logger.warning(

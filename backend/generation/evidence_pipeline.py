@@ -43,26 +43,34 @@ def _tokenize_query(text: str) -> set[str]:
 
 
 def _build_sub_queries(seed_query: str, module: str, table_structure: dict[str, Any]) -> list[str]:
+    """Build diverse sub-queries from seed + table columns/indexes for hybrid retrieval."""
     columns = [str(c).strip() for c in (table_structure.get("columns") or []) if str(c).strip()]
     indexes = [str(i).strip() for i in (table_structure.get("indexes") or []) if str(i).strip()]
+    # Use columns[1:] to skip empty or ID column; cap to avoid explosion.
+    cols = columns[1:6]
+    idxs = indexes[:6]
     subs: list[str] = []
-    for idx in indexes[:8]:
-        for col in columns[1:6]:
+
+    # 1) Seed + single column — retrieval by dimension (e.g. channel, preference).
+    for col in cols:
+        subs.append(f"{seed_query}; {col}")
+
+    # 2) Seed + single index — retrieval by segment/row (e.g. Safe Player, segment name).
+    for idx in idxs:
+        subs.append(f"{seed_query}; {idx}")
+
+    # 3) Seed + column + index — targeted combination (fewer to keep diversity).
+    for col in cols[:3]:
+        for idx in idxs[:3]:
             subs.append(f"{seed_query}; {col}; {idx}")
-    synonyms = [
-        "wechat weixin channel preference",
-        "conference congress",
-        "journal publication",
-        "patients per month monthly volume",
-        "moderate-to-severe",
-    ]
-    for syn in synonyms:
-        subs.append(f"{seed_query}; {syn}")
+
+    # 4) Module context when present.
     if module:
         subs.append(f"{module}; {seed_query}")
-    # Deduplicate and keep bounded.
+
+    # Deduplicate and cap at 10 so hybrid_retrieve stays bounded.
+    seen: set[str] = set()
     deduped: list[str] = []
-    seen = set()
     for q in subs:
         key = q.lower().strip()
         if key in seen:
@@ -99,12 +107,14 @@ def _facet_gate(
     for chunk in chunks:
         facet = facets.get(chunk.chunk_id, {})
         score = 0.0
+        summary = facet.get("summary") or ""
         text_blob = " ".join(
             [
                 " ".join(str(v) for v in facet.get("segments", [])),
                 " ".join(str(v) for v in facet.get("topics", [])),
                 " ".join(str(v) for v in facet.get("channels", [])),
                 " ".join(str(v) for v in facet.get("numbers", [])),
+                summary if isinstance(summary, str) else str(summary),
                 chunk.text[:350],
             ]
         ).lower()
@@ -163,6 +173,7 @@ def run_evidence_pipeline(
     try:
         with stage_scope("evidence_sub_query_build"):
             step_start = time.perf_counter()
+            logger.info("Evidence pipeline: building sub queries for seed query=%s module=%s table_structure=%s", seed_query, module, table_structure)
             sub_queries = _build_sub_queries(seed_query, module, table_structure)
             metrics["sub_queries"] = len(sub_queries)
             metrics["sub_query_ms"] = int((time.perf_counter() - step_start) * 1000)
@@ -205,6 +216,7 @@ def run_evidence_pipeline(
                     "topics": [],
                     "channels": [],
                     "numbers": [],
+                    "summary": "",
                     "noise_flag": chunk.noise_flag,
                 }
 

@@ -3,7 +3,8 @@
 Mirrors the chunk-level FacetCache but keyed by file_id instead of chunk_id.
 Each entry stores document-level signals generated once at upload time:
   - maturity:       "totally_raw" | "semi_raw" | "mature"
-  - segment_names:  list of HCP segment names (populated for mature files only)
+  - topic:          "customer segmentation" | "messaging strategy" | "others"
+  - summary:        one short sentence summarizing the document
   - filename:       original file name (for traceability)
 
 Backed by a JSONL file so it survives process restarts.
@@ -69,36 +70,40 @@ class DocumentFacetCache:
         except Exception as exc:
             logger.warning("Doc facet cache write failed file_id=%s err=%s", file_id, exc)
 
-    def get_best_maturity(self, file_ids: list[str]) -> tuple[str, list[str]]:
+    def get_best_maturity(
+        self, file_ids: list[str], topic_preference: str | None = None
+    ) -> str:
         """
-        Given a list of file_ids, return the highest maturity level found
-        and the corresponding segment names (if any mature file has them).
+        Given a list of file_ids, return the highest maturity level found.
+
+        If topic_preference is set (e.g. "customer segmentation"), only consider
+        files whose facet topic matches; if none match, fall back to all file_ids.
 
         Priority: mature > semi_raw > totally_raw
 
         Returns:
-            (maturity, segment_names)
-            segment_names is non-empty only when maturity == "mature"
+            maturity: one of "totally_raw" | "semi_raw" | "mature"
         """
         self._ensure_loaded()
         _PRIORITY = {"mature": 2, "semi_raw": 1, "totally_raw": 0}
         best_maturity = "totally_raw"
-        best_segments: list[str] = []
 
-        for fid in file_ids:
+        candidates = list(file_ids)
+        if topic_preference:
+            topic_pref = str(topic_preference).strip().lower()
+            by_topic = [fid for fid in file_ids if self._cache.get(fid, {}).get("topic") == topic_pref]
+            if by_topic:
+                candidates = by_topic
+
+        for fid in candidates:
             facet = self._cache.get(fid)
             if not facet:
                 continue
             maturity = str(facet.get("maturity", "totally_raw")).strip().lower()
             if _PRIORITY.get(maturity, 0) > _PRIORITY.get(best_maturity, 0):
                 best_maturity = maturity
-                best_segments = []
-            if maturity == "mature" and maturity == best_maturity:
-                names = facet.get("segment_names") or []
-                if isinstance(names, list) and names:
-                    best_segments = [str(n).strip() for n in names if str(n).strip()]
 
-        return best_maturity, best_segments
+        return best_maturity
 
 
 # Module-level singleton used by the ingest endpoint and the CS agent.

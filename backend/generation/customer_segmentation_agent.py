@@ -29,7 +29,7 @@ from langchain_openai import ChatOpenAI
 from shared.logging_config import setup_logging
 from generation.stage_metrics import record_llm_usage, stage_scope
 
-logger = setup_logging("generation")
+logger = setup_logging("cs_agent_generation")
 
 MIN_SEGMENTS = 2
 
@@ -733,34 +733,26 @@ class CustomerSegmentationAgent:
         segments: list[str] = []
 
         # ── Step 0: check doc-level facet cache ───────────────────────────
-        # Highest-maturity file wins. If a mature file already has segment
-        # names stored, skip the classify + extract LLM calls entirely.
+        # Highest-maturity file (optionally filtered by topic) wins and
+        # provides a maturity hint; segments are always generated per run.
         if file_ids:
             with stage_scope("cs_agent_doc_facet_lookup"):
                 try:
                     from generation.doc_facet_cache import get_doc_facet_cache
                     cache = get_doc_facet_cache()
-                    cached_maturity, cached_segments = cache.get_best_maturity(file_ids)
+                    cached_maturity = cache.get_best_maturity(
+                        file_ids, topic_preference="customer segmentation"
+                    )
                     has_any_entry = any(cache.get(fid) is not None for fid in file_ids)
                     if has_any_entry:
                         maturity_from_cache = True
-                        if cached_maturity == "mature" and cached_segments:
-                            segments = cached_segments[:n_segments]
-                            maturity = "mature"
-                            facet_cache_hit = True
-                            logger.info(
-                                "CS agent: doc facet cache hit module=%s maturity=%s segments=%s",
-                                module,
-                                maturity,
-                                segments,
-                            )
-                        else:
-                            maturity = cached_maturity
-                            logger.info(
-                                "CS agent: doc facet cache hit (maturity only) module=%s maturity=%s",
-                                module,
-                                maturity,
-                            )
+                        facet_cache_hit = True
+                        maturity = cached_maturity
+                        logger.info(
+                            "CS agent: doc facet cache hit module=%s maturity=%s",
+                            module,
+                            maturity,
+                        )
                 except Exception as exc:
                     logger.warning(
                         "CS agent: doc facet cache lookup failed module=%s err=%s; falling back to LLM classify",
@@ -768,31 +760,30 @@ class CustomerSegmentationAgent:
                         exc,
                     )
 
-        # ── Steps 1 + 2: classify + segment names (skip when cache resolved both) ──
-        if not facet_cache_hit and not segments:
-            if not maturity_from_cache:
-                # Retrieve a broad sample sufficient for maturity classification.
-                classify_content = self._retrieve_context(
-                    file_ids,
-                    "HCP customer segmentation analysis segment names maturity",
-                    module=module,
-                )
-                maturity = self._classify(classify_content, module)
+        # ── Steps 1 + 2: classify + segment names ──────────────────────────
+        if not maturity_from_cache:
+            # Retrieve a broad sample sufficient for maturity classification.
+            classify_content = self._retrieve_context(
+                file_ids,
+                "HCP customer segmentation analysis segment names maturity",
+                module=module,
+            )
+            maturity = self._classify(classify_content, module)
 
-            if maturity == "mature":
-                extract_content = self._retrieve_context(
-                    file_ids,
-                    "HCP segment names customer segmentation",
-                    module=module,
-                )
-                segments = self._extract_segments(extract_content, n_segments, module)
-            else:
-                synth_content = self._retrieve_context(
-                    file_ids,
-                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
-                    module=module,
-                )
-                segments = self._synthesize_segments(synth_content, n_segments, module)
+        if maturity == "mature":
+            extract_content = self._retrieve_context(
+                file_ids,
+                "HCP segment names customer segmentation",
+                module=module,
+            )
+            segments = self._extract_segments(extract_content, n_segments, module)
+        else:
+            synth_content = self._retrieve_context(
+                file_ids,
+                "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
+                module=module,
+            )
+            segments = self._synthesize_segments(synth_content, n_segments, module)
 
         # Enforce constraints: 2 ≤ count ≤ n_segments
         segments = [s for s in segments if s][:n_segments]

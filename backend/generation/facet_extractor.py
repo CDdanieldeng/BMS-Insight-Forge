@@ -25,6 +25,7 @@ def _rule_facet(chunk: ChunkRecord) -> dict[str, Any]:
         "topics": [t for t in _TOPIC_TERMS if t in text],
         "channels": [c for c in _CHANNEL_TERMS if c in text],
         "numbers": numbers[:5],
+        "summary": "",
         "noise_flag": chunk.noise_flag,
     }
 
@@ -35,6 +36,7 @@ def _normalize_facet(data: dict[str, Any], chunk: ChunkRecord) -> dict[str, Any]
     normalized.setdefault("topics", [])
     normalized.setdefault("channels", [])
     normalized.setdefault("numbers", [])
+    normalized.setdefault("summary", "")
     normalized.setdefault("noise_flag", chunk.noise_flag)
     return normalized
 
@@ -43,7 +45,8 @@ def extract_facet(chunk: ChunkRecord) -> dict[str, Any]:
     """Generate short facet signals; falls back to rules on failure."""
     system = (
         "Extract retrieval facets from text.\n"
-        "Return JSON with keys: segments, topics, channels, numbers, noise_flag.\n"
+        "Return JSON with keys: segments, topics, channels, numbers, summary, noise_flag.\n"
+        "summary: one short sentence summarizing the chunk content.\n"
         "numbers must preserve unit/qualifier when present.\n"
         "Output JSON only."
     )
@@ -52,10 +55,11 @@ def extract_facet(chunk: ChunkRecord) -> dict[str, Any]:
         f"{chunk.text[:2600]}\n\n"
         "Return format example:\n"
         '{"segments":["safe player"],"topics":["preferences"],"channels":["wechat"],'
-        '"numbers":["34 moderate-to-severe patients per month"],"noise_flag":false}'
+        '"numbers":["34 moderate-to-severe patients per month"],'
+        '"summary":"HCP segment preferences for wechat engagement.","noise_flag":false}'
     )
     try:
-        raw = complete(system, user, max_tokens=260)
+        raw = complete(system, user, max_tokens=260, model_override="qwen-turbo")
         payload = raw.strip()
         if "```" in payload:
             m = re.search(r"```(?:json)?\s*([\s\S]*?)```", payload)
@@ -79,8 +83,11 @@ def extract_facets_batch(chunks: list[ChunkRecord]) -> dict[str, dict[str, Any]]
     system = (
         "Extract retrieval facets for each chunk.\n"
         "Return ONLY a JSON array. Each item must be:\n"
-        '{"chunk_id":"...", "segments":[], "topics":[], "channels":[], "numbers":[], "noise_flag":false}\n'
-        "numbers must preserve unit/qualifier when present."
+        '{"chunk_id":"...", "segments":[], "topics":[], "channels":[], "numbers":[], "summary":"", "noise_flag":false}\n'
+        "Segments means the content maybe can use to define a segment or a group of segments of HCPs.\n"
+        "Topic can be Demographics, HCPs preference channel to be engaged, Attitudes/Beliefs, Capabilities, Environment, Behaviors, Drivers, Barriers and Others.\n"
+        "summary: one short sentence summarizing the chunk content.\n"
+        "numbers must preserve unit/qualifier when present, and number should come with a little instruction of what these numbers are.\n"
     )
     block_list: list[str] = []
     for chunk in chunks:
