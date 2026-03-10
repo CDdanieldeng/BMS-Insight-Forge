@@ -11,7 +11,7 @@ def build_prompts(
     n_rows = len(indexes)
     segments_list = ", ".join(f'"{s}"' for s in segment_names)
 
-    system = f"""You are a strict information extraction agent supporting a pharmaceutical company.
+    system = f"""You are a professional consultant supporting a pharmaceutical company.
 
 Your task is to extract structured information describing HCP customer segments \
 from the uploaded materials and populate a predefined table.

@@ -164,7 +164,7 @@ Good Examples of Segment Names:
 - Safe Player
 - Traditionalist
 
-Return ONLY a valid JSON flat array of segment name strings.
+Return ONLY a valid JSON flat array of segment name strings. Only return the segment in English
 No markdown, no explanation, no extra keys."""
 
 _EXTRACT_USER = """\

@@ -696,13 +696,17 @@ def render_chat_panel(slide_meta: dict, module: str):
             border: 1px solid #d3e7ff;
         }
         .ai-msg.assistant {
-            background: #ffeef0;
-            border: 1px solid #ffd7dc;
+            background: #e8e0f5;
+            border: 1px solid #d4c8e8;
         }
         .ai-msg-wrap { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .ai-msg-wrap.user { justify-content: flex-end; }
+        .ai-msg-wrap.assistant { justify-content: flex-start; }
         .ai-msg-icon { flex-shrink: 0; font-size: 1.1rem; margin-top: 0.15rem; }
-        .ai-msg-wrap.user .ai-msg-icon { color: #1a73e8; }
-        .ai-msg-wrap.assistant .ai-msg-icon { color: #c5221f; }
+        .ai-msg-wrap.user .ai-msg-icon { color: #1a73e8; order: 1; }
+        .ai-msg-wrap.user .ai-msg { order: 2; }
+        .ai-msg-wrap.assistant .ai-msg-icon { color: #6b4c9a; }
+        .ai-msg-wrap.assistant .ai-msg { order: 2; }
         </style>
         """,
         unsafe_allow_html=True,
