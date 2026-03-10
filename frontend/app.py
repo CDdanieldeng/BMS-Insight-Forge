@@ -667,19 +667,11 @@ def render_chat_panel(slide_meta: dict, module: str):
     st.markdown(
         """
         <style>
-        /* keep button labels on one line in narrow right-side panel */
+        /* keep button labels on one line */
         div[data-testid="stButton"] button,
         div[data-testid="stFormSubmitButton"] button {
             white-space: nowrap;
             word-break: keep-all;
-        }
-        /* make chat action buttons compact (Send/Clear use tertiary type) */
-        div[data-testid="stButton"] button[kind="tertiary"] p {
-            font-size: 0.78rem !important;
-        }
-        div[data-testid="stButton"] button[kind="tertiary"] {
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.25rem !important;
         }
         /* chat mode dropdown: keep only the caret visible when collapsed */
         [class*="st-key-chat_mode_"] [data-baseweb="select"] span,
@@ -707,20 +699,24 @@ def render_chat_panel(slide_meta: dict, module: str):
             background: #ffeef0;
             border: 1px solid #ffd7dc;
         }
+        .ai-msg-wrap { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .ai-msg-icon { flex-shrink: 0; font-size: 1.1rem; margin-top: 0.15rem; }
+        .ai-msg-wrap.user .ai-msg-icon { color: #1a73e8; }
+        .ai-msg-wrap.assistant .ai-msg-icon { color: #c5221f; }
         </style>
         """,
         unsafe_allow_html=True,
     )
     st.markdown(
         "<div style='font-size:0.9rem;font-weight:600;margin:0.1rem 0 0.35rem 0'>"
-        "Refine with AI</div>",
+        "Insight Forge - helping your business plan come to life</div>",
         unsafe_allow_html=True,
     )
 
     # ── Single unified chat box ─────────────────────────────────────────────
     with st.container(border=True):
-        # Scrollable message history
-        with st.container(height=200, border=False):
+        # Scrollable message history (larger chat area)
+        with st.container(height=440, border=False):
             if not chat_history:
                 st.markdown(
                     "<div style='text-align:center;color:#aaa;padding:2.5rem 0;"
@@ -730,9 +726,12 @@ def render_chat_panel(slide_meta: dict, module: str):
             for msg in chat_history:
                 role = msg.get("role", "assistant")
                 css_role = "user" if role == "user" else "assistant"
+                icon = "👤" if role == "user" else "🤖"
                 content = html.escape(str(msg.get("content", ""))).replace("\n", "<br>")
                 st.markdown(
-                    f"<div class='ai-msg {css_role}'>{content}</div>",
+                    f"<div class='ai-msg-wrap {css_role}'>"
+                    f"<span class='ai-msg-icon' title={'You' if role == 'user' else 'AI'}>{icon}</span>"
+                    f"<div class='ai-msg {css_role}'>{content}</div></div>",
                     unsafe_allow_html=True,
                 )
 
@@ -763,18 +762,19 @@ def render_chat_panel(slide_meta: dict, module: str):
                 ),
                 label_visibility="collapsed",
             )
+    # Send and Clear in one horizontal row, full-width like Fill Slide
     action_l, action_r = st.columns(2)
     with action_l:
         send_clicked = st.button(
             "Send",
-            type="tertiary",
+            type="primary",
             use_container_width=True,
             key=f"send_chat_{slide_idx}",
         )
     with action_r:
         clear_clicked = st.button(
             "Clear",
-            type="tertiary",
+            type="secondary",
             use_container_width=True,
             key=f"clear_chat_{slide_idx}",
         )
@@ -962,10 +962,17 @@ def render_module_tab(module: str, slides: list):
         slide_idx = slide_meta["idx"]
         filled = slide_idx in st.session_state.filled_slides
 
-        # Reduce table area so the right controls/chat panel has more room.
-        col_slide, col_ctrl = st.columns([2, 1])
-        with col_slide:
-            # Slide page header
+        # 50/50 split: left = chat, divider, right = table (top) + upload (bottom)
+        col_left, col_divider, col_right = st.columns([1, 0.02, 1], gap="small")
+        with col_left:
+            render_chat_panel(slide_meta, module)
+        with col_divider:
+            st.markdown(
+                "<div style='border-left: 2px solid #e0e0e0; min-height: 480px; margin: 0;'></div>",
+                unsafe_allow_html=True,
+            )
+        with col_right:
+            # Top right: slide header + table
             icon = MODULE_ICONS.get(module, "📋")
             fill_badge = (
                 "<span style='background:#d4edda;color:#155724;border-radius:8px;"
@@ -978,9 +985,9 @@ def render_module_tab(module: str, slides: list):
                 unsafe_allow_html=True,
             )
             render_slide_content(slide_meta)
-        with col_ctrl:
+            st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+            # Bottom right: upload + Fill Slide
             render_controls_panel(slide_meta, module)
-            render_chat_panel(slide_meta, module)
 
         # Download when all slides in module are done
         all_filled = all(s["idx"] in st.session_state.filled_slides for s in slides)

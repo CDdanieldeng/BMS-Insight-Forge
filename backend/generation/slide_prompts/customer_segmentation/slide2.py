@@ -57,7 +57,7 @@ Stage 2 - Comparative Assessment (if no explicit ranking):
 
   3. Segment Profile Strength: Measured by demographic, regional, or attitudinal attractiveness and strategic fit
 
-- At least one segment must be "High".
+- Two segment must be "High".
 - At least one segment must be "Low".
 - Others may be "Medium".
 - Explanation must explicitly reference the three criteria, must be grounded only in extracted evidence, and summarized into 1-3 concise sentences.
