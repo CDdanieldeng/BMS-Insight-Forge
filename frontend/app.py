@@ -122,12 +122,15 @@ def _get_slide_chat_history(slide_idx: int) -> list[dict[str, str]]:
     return by_slide[slide_idx]
 
 
-def _append_slide_chat_message(slide_idx: int, role: str, content: str):
+def _append_slide_chat_message(slide_idx: int, role: str, content: str, thinking: str | None = None):
     content = str(content).strip()
     if role not in {"user", "assistant"} or not content:
         return
     history = _get_slide_chat_history(slide_idx)
-    history.append({"role": role, "content": content})
+    msg: dict[str, str | None] = {"role": role, "content": content}
+    if thinking and str(thinking).strip():
+        msg["thinking"] = str(thinking).strip()
+    history.append(msg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -753,6 +756,33 @@ def render_chat_panel(slide_meta: dict, module: str):
         .ai-msg-wrap.user .ai-msg { order: 2; }
         .ai-msg-wrap.assistant .ai-msg-icon { color: #6b4c9a; }
         .ai-msg-wrap.assistant .ai-msg { order: 2; }
+        .ai-msg-thinking { margin-bottom: 0.35rem; }
+        .ai-msg-thinking details {
+            font-size: 0.8rem; color: #5a4a6a; background: #f5f0fa; border: 1px solid #d4c8e8;
+            border-radius: 6px; padding: 0; overflow: hidden; cursor: pointer;
+        }
+        .ai-msg-thinking summary {
+            padding: 0.35rem 0.5rem; font-weight: 600; font-size: 0.76rem; color: #6b5b7b;
+            list-style: none; display: flex; align-items: center; gap: 0.35rem;
+        }
+        .ai-msg-thinking summary::-webkit-details-marker { display: none; }
+        .ai-msg-thinking summary::before { content: "▶"; font-size: 0.6rem; transition: transform 0.2s; }
+        .ai-msg-thinking details[open] summary::before { transform: rotate(90deg); }
+        .ai-msg-thinking-content {
+            padding: 0.45rem 0.6rem; font-size: 0.8rem; line-height: 1.45; font-style: italic;
+            border-top: 1px solid #e8e0f0; background: linear-gradient(180deg, #faf8fc 0%, #f5f0fa 100%);
+            font-family: "SF Mono", "Consolas", "Monaco", monospace; white-space: pre-wrap; word-break: break-word;
+            animation: think-fadein 0.25s ease-out;
+        }
+        @keyframes think-fadein { from { opacity: 0; } to { opacity: 1; } }
+        .ai-msg-thinking-stream {
+            display: inline; position: relative;
+        }
+        .ai-msg-thinking-stream::after {
+            content: "▋"; animation: think-blink 1s step-end infinite; color: #9a8ab8; font-weight: normal;
+        }
+        @keyframes think-blink { 50% { opacity: 0; } }
+        .ai-msg-body { flex: 1; min-width: 0; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -793,10 +823,22 @@ def render_chat_panel(slide_meta: dict, module: str):
                 css_role = "user" if role == "user" else "assistant"
                 icon = "👤" if role == "user" else "🤖"
                 content = html.escape(str(msg.get("content", ""))).replace("\n", "<br>")
+                thinking = msg.get("thinking", "")
+                thinking_html = ""
+                if thinking and role == "assistant":
+                    thinking_escaped = html.escape(str(thinking)).replace("\n", "<br>")
+                    thinking_html = (
+                        f"<div class='ai-msg-thinking'>"
+                        f"<details><summary>💭 Thinking</summary>"
+                        f"<div class='ai-msg-thinking-content'>"
+                        f"<span class='ai-msg-thinking-stream'>{thinking_escaped}</span>"
+                        f"</div></details></div>"
+                    )
+                body_html = f"{thinking_html}<div class='ai-msg {css_role}'>{content}</div>" if thinking_html else f"<div class='ai-msg {css_role}'>{content}</div>"
                 st.markdown(
                     f"<div class='ai-msg-wrap {css_role}'>"
                     f"<span class='ai-msg-icon' title={'You' if role == 'user' else 'AI'}>{icon}</span>"
-                    f"<div class='ai-msg {css_role}'>{content}</div></div>",
+                    f"<div class='ai-msg-body'>{body_html}</div></div>",
                     unsafe_allow_html=True,
                 )
 
@@ -1080,6 +1122,7 @@ def render_chat_panel(slide_meta: dict, module: str):
                     "assistant_message",
                     "I am ready to help you complete this table step by step.",
                 )
+                thinking_msg = payload.get("thinking") or None
                 draft_data = payload.get("draft_table_data") or []
                 draft_headers = payload.get("draft_column_headers") or []
                 st.session_state.setdefault("cowork_draft_by_slide", {})[slide_idx] = {
@@ -1090,6 +1133,7 @@ def render_chat_panel(slide_meta: dict, module: str):
                     workflow.get("ready_for_ppt_fill")
                 )
             else:
+                thinking_msg = None
                 resolved_mode = payload.get("mode", chat_mode)
                 updated = payload.get("table_data", [])
                 updated_headers = payload.get("column_headers")
@@ -1129,7 +1173,12 @@ def render_chat_panel(slide_meta: dict, module: str):
                     ] = updated_headers
                 st.success("Slide updated!")
             st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
-            _append_slide_chat_message(slide_idx, "assistant", assistant_msg)
+            _append_slide_chat_message(
+                slide_idx,
+                "assistant",
+                assistant_msg,
+                thinking=thinking_msg if chat_mode == "cowork" else None,
+            )
             _rerun_in_module(module)
         except Exception as e:
             _append_slide_chat_message(

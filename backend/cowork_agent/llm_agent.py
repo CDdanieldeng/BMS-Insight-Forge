@@ -56,7 +56,7 @@ def generate_conversational_turn(
         ready_for_ppt_fill=ready_for_ppt_fill,
         segments_identified=segments_identified,
     )
-    raw = complete(system, user, max_tokens=900)
+    raw = complete(system, user, max_tokens=1400)
     try:
         return _extract_json(raw)
     except Exception:

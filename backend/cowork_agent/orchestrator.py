@@ -249,6 +249,7 @@ class CSCoworkOrchestrator:
                 draft_table_data=session.working_draft.table_data,
                 draft_column_headers=segment_names,
                 ppt_fill_payload=None,
+                thinking=None,
             )
 
         session.history.append(ChatMessage(role="user", content=req.user_message))
@@ -394,6 +395,7 @@ class CSCoworkOrchestrator:
         self.session_store.upsert(session)
         return CoworkTurnResponse(
             assistant_message=assistant_message,
+            thinking=str(llm_turn.get("thinking", "")).strip() or None,
             workflow=workflow,
             draft_table_data=session.working_draft.table_data,
             draft_column_headers=session.working_draft.column_headers,

@@ -125,6 +125,7 @@ class CoworkTurnResponse(BaseModel):
     draft_table_data: list[list[str]] = Field(default_factory=list)
     draft_column_headers: list[str] = Field(default_factory=list)
     ppt_fill_payload: dict[str, Any] | None = None
+    thinking: str | None = None
 
 
 class CoworkUploadResponse(BaseModel):

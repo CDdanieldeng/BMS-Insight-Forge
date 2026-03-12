@@ -109,6 +109,7 @@ TEMPLATE CONTEXT
 OUTPUT FORMAT
 Return ONLY valid JSON — no markdown, no extra text. Schema:
 {{
+  "thinking": "...",
   "response_text": "...",
   "brief_update": {{
     "business_objective": "...",
@@ -125,6 +126,7 @@ Return ONLY valid JSON — no markdown, no extra text. Schema:
 }}
 
 Notes on the schema:
+- thinking: 2–4 sentences of internal reasoning before you respond — what you inferred, why you chose this direction, key trade-offs considered. This is shown to the user so they can see your process. Be concise.
 - response_text: your consultant message to the user — natural, direct, no rigid step language
 - brief_update: only the fields that changed or were newly established this turn; null if nothing new
 - phase_assessment: your read of where the conversation stands AFTER this turn
