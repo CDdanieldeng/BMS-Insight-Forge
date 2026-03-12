@@ -5,13 +5,38 @@ def build_prompts(
     content: str,
     indexes: list[str],
     segment_names: list[str],
+    cowork_summary: str | None = None,
 ) -> tuple[str, str]:
     """Focused prompt for Customer Segmentation slide 1."""
     n_segments = len(segment_names)
     n_rows = len(indexes)
     segments_list = ", ".join(f'"{s}"' for s in segment_names)
 
+    cowork_block = ""
+    if cowork_summary and cowork_summary.strip():
+        cowork_block = f"""
+------------------------------------------------------------
+
+COWORK GUIDANCE (MANDATORY — FOLLOW EXACTLY)
+
+SEGMENTS (IMMUTABLE): The segment names and definitions below are FIXED. You cannot
+change, add, remove, or rename any segment. Use them exactly as agreed.
+
+CONTENT (DOCUMENT-SOURCED): Every cell value in the table MUST be extracted from
+or verified against the uploaded materials. Scan the documents for evidence that
+supports each segment under each row. If the documents do not contain evidence
+for a given segment × row, use exactly: "Not found in provided materials."
+Do NOT invent content; do NOT use the summary as a source for cell values.
+
+Agreed segmentation summary:
+{cowork_summary.strip()}
+
+------------------------------------------------------------
+
+"""
+
     system = f"""You are a professional consultant supporting a pharmaceutical company.
+{cowork_block}
 
 Your task is to extract structured information describing HCP customer segments \
 from the uploaded materials and populate a predefined table.

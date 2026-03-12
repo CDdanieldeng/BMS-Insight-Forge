@@ -12,6 +12,7 @@ from shared.logging_config import setup_logging
 from fill_engine.router import router as fill_engine_router
 from generation.router import router as generation_router
 from retriever.router import router as retriever_router
+from cowork_agent.router import router as cowork_agent_router
 
 # Load .env from project root so backend works even when started manually.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -44,6 +45,7 @@ app.add_middleware(
 app.include_router(generation_router)
 app.include_router(retriever_router)
 app.include_router(fill_engine_router)
+app.include_router(cowork_agent_router)
 
 
 @app.get("/health")

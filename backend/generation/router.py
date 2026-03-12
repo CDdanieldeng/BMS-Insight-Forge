@@ -19,6 +19,7 @@ class FillRequest(BaseModel):
     module: str
     file_ids: list[str]
     table_structure: dict[str, Any]
+    cowork_guidance: dict[str, Any] | None = None  # {"summary": str, "segment_names": list[str]}
 
 
 class ChatRequest(BaseModel):
@@ -96,6 +97,7 @@ async def fill(req: FillRequest) -> dict[str, Any]:
             module=req.module,
             file_ids=req.file_ids,
             table_structure=req.table_structure,
+            cowork_guidance=req.cowork_guidance,
         )
         return result  # {"table_data": [...], "column_headers": [...] | None}
     except Exception as e:

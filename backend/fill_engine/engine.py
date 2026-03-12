@@ -33,8 +33,12 @@ def _resolve_pptx_path(path: str | Path) -> Path:
 # Placeholder patterns that indicate a cell is blank/fillable
 BLANK_PATTERNS = ("", "—", "-", "TBD", "tbd", "N/A", "n/a", " ")
 
-# Module names in separator slides
-MODULE_NAMES = ("Customer Segmentation", "Messaging Strategy")
+# Canonical module names in separator slides and accepted aliases.
+MODULE_ALIASES: dict[str, tuple[str, ...]] = {
+    "Customer Segmentation": ("Customer Segmentation",),
+    "SWOT Analysis": ("SWOT Analysis", "SWOT"),
+    "Messaging Strategy": ("Messaging Strategy",),
+}
 
 
 def _is_blank(text: str) -> bool:
@@ -64,10 +68,11 @@ def _get_slide_text(slide) -> str:
 
 def _detect_module(slide) -> str | None:
     """Detect module name from slide text (for separators)."""
-    text = _get_slide_text(slide)
-    for name in MODULE_NAMES:
-        if name in text:
-            return name
+    text = _normalize_text(_get_slide_text(slide)).lower()
+    for canonical_name, aliases in MODULE_ALIASES.items():
+        for alias in aliases:
+            if _normalize_text(alias).lower() in text:
+                return canonical_name
     return None
 
 

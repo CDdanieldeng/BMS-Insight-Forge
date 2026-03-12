@@ -580,6 +580,7 @@ class CustomerSegmentationAgent:
         indexes: list[str],
         module: str,
         trace_capture: dict[str, Any] | None = None,
+        cowork_summary: str | None = None,
     ) -> list[list[str]]:
         """Step 3: generate slide table content using slide1 prompt rules.
 
@@ -616,7 +617,9 @@ class CustomerSegmentationAgent:
                     for _ in indexes
                 ]
 
-            system_prompt, user_prompt = build_prompts(content, indexes, segments)
+            system_prompt, user_prompt = build_prompts(
+                content, indexes, segments, cowork_summary=cowork_summary
+            )
 
             if trace_capture is not None:
                 trace_capture["system_prompt"] = system_prompt
@@ -697,6 +700,7 @@ class CustomerSegmentationAgent:
         indexes: list[str],
         module: str = "customer segmentation",
         trace_capture: dict[str, Any] | None = None,
+        cowork_guidance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Run the full CS agent pipeline.
@@ -704,6 +708,9 @@ class CustomerSegmentationAgent:
         All three steps use targeted retrieval via the evidence pipeline rather
         than receiving a pre-built full-content dump.  This keeps every LLM call
         within the model's token limit regardless of how many files are uploaded.
+
+        When cowork_guidance is provided (from End conversation summary), skips
+        steps 0-2 and uses agreed segment names + summary as guidance for table generation.
 
         Step 0: doc-level facet cache lookup — skips steps 1+2 for mature files.
         Step 1: classify maturity (only on cache miss, uses broad retrieval).
@@ -720,17 +727,45 @@ class CustomerSegmentationAgent:
         """
         start = time.perf_counter()
         logger.info(
-            "CS agent run start module=%s n_segments=%d indexes=%d file_ids=%s",
+            "CS agent run start module=%s n_segments=%d indexes=%d file_ids=%s cowork_guidance=%s",
             module,
             n_segments,
             len(indexes),
             file_ids,
+            bool(cowork_guidance),
         )
 
         facet_cache_hit = False
         maturity = "totally_raw"
         maturity_from_cache = False
         segments: list[str] = []
+
+        # ── Cowork guidance path: skip steps 0-2, use agreed segments ──────
+        if cowork_guidance and cowork_guidance.get("summary") and cowork_guidance.get("segment_names"):
+            seg_names = cowork_guidance["segment_names"]
+            segments = [str(s).strip() for s in seg_names if str(s).strip()][:n_segments]
+            while len(segments) < MIN_SEGMENTS:
+                segments.append(f"Segment {len(segments) + 1}")
+            facet_cache_hit = True
+            maturity = "cowork_guided"
+            logger.info(
+                "CS agent: using cowork guidance segments=%s",
+                segments,
+            )
+            table_data = self._generate_table(
+                file_ids,
+                segments,
+                indexes,
+                module,
+                trace_capture=trace_capture,
+                cowork_summary=cowork_guidance.get("summary"),
+            )
+            return {
+                "segment_names": segments,
+                "table_data": table_data,
+                "maturity": maturity,
+                "facet_cache_hit": facet_cache_hit,
+            }
 
         # ── Step 0: check doc-level facet cache ───────────────────────────
         # Highest-maturity file (optionally filtered by topic) wins and

@@ -652,6 +652,7 @@ def run_fill(
     module: str,
     file_ids: list[str],
     table_structure: dict[str, Any],
+    cowork_guidance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Orchestrate: enhance query -> retriever -> (optionally) extract segments
@@ -699,9 +700,18 @@ def run_fill(
         # the entire segment-identification + table-generation pipeline to the
         # CustomerSegmentationAgent.  Subsequent CS slides hit the cache path
         # below and continue through the standard retrieval flow.
+        # When cowork_guidance is provided (from End conversation summary), the
+        # agent skips segment extraction and uses the agreed segments + summary.
         if _has_placeholder_columns(placeholder_cols) and not is_ms_slide3 and _is_cs:
             with stage_scope("customer_segmentation_agent"):
-                if module in _segment_name_cache:
+                use_cowork = cowork_guidance and cowork_guidance.get("summary") and cowork_guidance.get("segment_names")
+                if use_cowork:
+                    logger.info(
+                        "CS agent: using cowork guidance module=%s segments=%s",
+                        module,
+                        cowork_guidance.get("segment_names"),
+                    )
+                if module in _segment_name_cache and not use_cowork:
                     # Cache hit: reuse segments, fall through to standard path.
                     segment_names = _segment_name_cache[module]
                     logger.info(
@@ -728,6 +738,7 @@ def run_fill(
                         indexes=indexes,
                         module=module,
                         trace_capture=fill_trace,
+                        cowork_guidance=cowork_guidance if use_cowork else None,
                     )
                     segment_names = agent_result["segment_names"]
                     table_data = agent_result["table_data"]
