@@ -250,6 +250,53 @@ Uploaded material:
 Identify the HCP segments now:"""
 
 
+_SYNTHESIZE_WITH_METHODOLOGY_SYSTEM = """\
+You are a pharmaceutical commercial strategy analyst.
+
+Analyze the uploaded research material and identify HCP customer segments, \
+guided by a segmentation methodology agreed with the business team.
+
+SEGMENTATION METHODOLOGY GUIDE (APPLY THIS APPROACH)
+{methodology}
+
+GENERAL SEGMENTATION GUIDELINES
+
+Customers refer only to HCPs (physicians, specialists, prescribers, clinical decision makers). \
+Do NOT create segments for payers, regulators, procurement bodies, government stakeholders, or patients.
+
+Segments must primarily differ by key distinguishing traits, such as:
+- Attitudes / beliefs: mindset toward disease management, treatment innovation, evidence expectations
+- Behaviors: prescribing decisions, therapy choice, sequencing, switching, adoption timing
+- Drivers and barriers: factors influencing treatment decisions
+
+SOURCING RULES (CRITICAL)
+1. Only include segment distinctions explicitly supported by the source material.
+2. Do not logically deduce traits not stated in the documents.
+3. The methodology guide is a search lens — it tells you what to look for; \
+evidence must come from the uploaded materials.
+
+NAMING RULES
+- Concise and descriptive (< 5 words each)
+- Mutually exclusive and collectively exhaustive across the identified HCPs
+- Respectful and neutral
+- Names should reflect the segmentation lens described in the methodology guide; \
+candidate directions mentioned there are examples to inspire naming, not fixed labels
+
+Your goal is to identify between {min_segments} and {n_segments} distinct, \
+mutually exclusive HCP segments that best match the methodology guide and the evidence.
+
+Return ONLY a valid JSON flat array of segment name strings.
+No markdown, no explanation, no extra keys."""
+
+_SYNTHESIZE_WITH_METHODOLOGY_USER = """\
+Number of segments to return: between {min_segments} and {n_segments}
+
+Uploaded material:
+{content}
+
+Following the methodology guide above, identify the HCP segments now:"""
+
+
 # The table generation prompt is delegated to slide1.build_prompts() to keep
 # a single source of truth for extraction rules used in both initial generation
 # and the feedback path.
@@ -388,6 +435,10 @@ class CustomerSegmentationAgent:
         self._synthesize_prompt = ChatPromptTemplate.from_messages([
             ("system", _SYNTHESIZE_SYSTEM),
             ("human", _SYNTHESIZE_USER),
+        ])
+        self._synthesize_with_methodology_prompt = ChatPromptTemplate.from_messages([
+            ("system", _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM),
+            ("human", _SYNTHESIZE_WITH_METHODOLOGY_USER),
         ])
 
     # ------------------------------------------------------------------
@@ -573,6 +624,57 @@ class CustomerSegmentationAgent:
                 )
                 return []
 
+    def _synthesize_with_methodology(
+        self, content: str, n_segments: int, module: str, methodology: str
+    ) -> list[str]:
+        """Step 2 (methodology-guided): identify segment names from data guided by cowork methodology."""
+        with stage_scope("cs_agent_synthesize_with_methodology"):
+            raw = ""
+            try:
+                start = time.perf_counter()
+                rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
+                    methodology=methodology.strip(),
+                    min_segments=MIN_SEGMENTS,
+                    n_segments=n_segments,
+                )
+                _msg = (self._synthesize_with_methodology_prompt | self._segment_llm).invoke({
+                    "methodology": methodology.strip(),
+                    "content": content,
+                    "n_segments": n_segments,
+                    "min_segments": MIN_SEGMENTS,
+                })
+                _record_langchain_usage(_msg, elapsed_ms=int((time.perf_counter() - start) * 1000))
+                raw = _msg.content if hasattr(_msg, "content") else str(_msg)
+                _write_agent_trace(
+                    step="synthesize_with_methodology",
+                    module=module,
+                    system_prompt=rendered_system,
+                    user_prompt=_SYNTHESIZE_WITH_METHODOLOGY_USER.format(
+                        content=content[:200] + "...",
+                        n_segments=n_segments,
+                        min_segments=MIN_SEGMENTS,
+                    ),
+                    llm_raw_response=raw,
+                    extra={"n_segments": n_segments, "methodology_len": len(methodology)},
+                )
+                names = self._parse_segment_list(raw, n_segments, module)
+                logger.info(
+                    "CS agent methodology-guided synthesize done module=%s names=%s elapsed_ms=%d",
+                    module,
+                    names,
+                    int((time.perf_counter() - start) * 1000),
+                )
+                return names
+            except Exception as exc:
+                logger.warning(
+                    "CS agent methodology-guided synthesize failed module=%s err=%s raw=%s; "
+                    "falling back to standard synthesize",
+                    module,
+                    exc,
+                    raw[:400],
+                )
+                return []
+
     def _generate_table(
         self,
         file_ids: list[str],
@@ -612,8 +714,13 @@ class CustomerSegmentationAgent:
                     len(indexes),
                     len(segments),
                 )
+                empty_cell = (
+                    "proposed segment can not be found in given files"
+                    if cowork_summary and cowork_summary.strip()
+                    else "Not found in provided materials."
+                )
                 return [
-                    ["Not found in provided materials." for _ in segments]
+                    [empty_cell for _ in segments]
                     for _ in indexes
                 ]
 
@@ -705,16 +812,18 @@ class CustomerSegmentationAgent:
         """
         Run the full CS agent pipeline.
 
-        All three steps use targeted retrieval via the evidence pipeline rather
-        than receiving a pre-built full-content dump.  This keeps every LLM call
-        within the model's token limit regardless of how many files are uploaded.
+        All steps use targeted retrieval via the evidence pipeline rather than
+        receiving a pre-built full-content dump, keeping every LLM call within
+        the model's token limit regardless of how many files are uploaded.
 
-        When cowork_guidance is provided (from End conversation summary), skips
-        steps 0-2 and uses agreed segment names + summary as guidance for table generation.
+        When cowork_guidance is provided (from End conversation summary), its
+        methodology guide steers segment synthesis from the uploaded data instead
+        of locking in provisional names agreed during the conversation.
 
         Step 0: doc-level facet cache lookup — skips steps 1+2 for mature files.
         Step 1: classify maturity (only on cache miss, uses broad retrieval).
-        Step 2: extract/synthesize segment names (uses targeted retrieval).
+        Step 2: extract/synthesize segment names (uses targeted retrieval);
+                methodology-guided when cowork_guidance is present.
         Step 3: generate table (always, uses segment+row-label targeted retrieval).
 
         Returns:
@@ -722,7 +831,7 @@ class CustomerSegmentationAgent:
               "segment_names": list[str],   # 2 ≤ len ≤ n_segments
               "table_data":    list[list[str]],
               "maturity":      str,          # for observability
-              "facet_cache_hit": bool,       # True when steps 1+2 were skipped
+              "facet_cache_hit": bool,
             }
         """
         start = time.perf_counter()
@@ -740,16 +849,43 @@ class CustomerSegmentationAgent:
         maturity_from_cache = False
         segments: list[str] = []
 
-        # ── Cowork guidance path: skip steps 0-2, use agreed segments ──────
-        if cowork_guidance and cowork_guidance.get("summary") and cowork_guidance.get("segment_names"):
-            seg_names = cowork_guidance["segment_names"]
-            segments = [str(s).strip() for s in seg_names if str(s).strip()][:n_segments]
-            while len(segments) < MIN_SEGMENTS:
-                segments.append(f"Segment {len(segments) + 1}")
+        # ── Cowork guidance path: use methodology to guide segment synthesis ──
+        # When a cowork summary (methodology guide) is present, use it to steer
+        # segment identification from the uploaded data rather than locking in
+        # provisional names agreed during the conversation.
+        if cowork_guidance and cowork_guidance.get("summary"):
+            methodology = cowork_guidance["summary"]
             facet_cache_hit = True
             maturity = "cowork_guided"
+
+            # Retrieve content for methodology-guided synthesis.
+            synth_content = self._retrieve_context(
+                file_ids,
+                "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
+                module=module,
+            )
+
+            segments = self._synthesize_with_methodology(
+                synth_content, n_segments, module, methodology
+            )
+
+            # Fall back to any candidate directions from the brief if synthesis fails.
+            if not segments and cowork_guidance.get("segment_names"):
+                seg_names = cowork_guidance["segment_names"]
+                segments = [str(s).strip() for s in seg_names if str(s).strip()][:n_segments]
+                logger.info(
+                    "CS agent: methodology synthesis failed, falling back to candidate directions=%s",
+                    segments,
+                )
+
+            # Enforce constraints: 2 ≤ count ≤ n_segments
+            segments = [s for s in segments if s][:n_segments]
+            while len(segments) < MIN_SEGMENTS:
+                segments.append(f"Segment {len(segments) + 1}")
+
             logger.info(
-                "CS agent: using cowork guidance segments=%s",
+                "CS agent: cowork methodology-guided segments resolved module=%s segments=%s",
+                module,
                 segments,
             )
             table_data = self._generate_table(
@@ -758,7 +894,7 @@ class CustomerSegmentationAgent:
                 indexes,
                 module,
                 trace_capture=trace_capture,
-                cowork_summary=cowork_guidance.get("summary"),
+                cowork_summary=methodology,
             )
             return {
                 "segment_names": segments,

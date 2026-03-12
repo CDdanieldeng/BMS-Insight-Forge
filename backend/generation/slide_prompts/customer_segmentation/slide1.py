@@ -17,23 +17,36 @@ def build_prompts(
         cowork_block = f"""
 ------------------------------------------------------------
 
-COWORK GUIDANCE (MANDATORY — FOLLOW EXACTLY)
+SEGMENTATION METHODOLOGY GUIDANCE
 
-SEGMENTS (IMMUTABLE): The segment names and definitions below are FIXED. You cannot
-change, add, remove, or rename any segment. Use them exactly as agreed.
+The following methodology was agreed with the business team to guide HCP segment
+identification. You MUST apply this methodology as your primary search lens when
+scanning the uploaded materials:
 
-CONTENT (DOCUMENT-SOURCED): Every cell value in the table MUST be extracted from
-or verified against the uploaded materials. Scan the documents for evidence that
-supports each segment under each row. If the documents do not contain evidence
-for a given segment × row, use exactly: "Not found in provided materials."
-Do NOT invent content; do NOT use the summary as a source for cell values.
+- Use the segmentation lens, identification criteria, and segment profile
+  expectations described below to locate evidence for each segment in the files.
+- Each segment column header reflects a segment direction proposed by this
+  methodology — search for evidence in the uploaded materials that matches it.
+- If the uploaded materials contain information that helps place an HCP group
+  under a segment, classify it accordingly.
+- This methodology is NOT itself a source of cell content — every cell value MUST
+  be extracted from or verified against the uploaded materials.
+- If the materials do not contain sufficient evidence to populate a cell for a
+  segment that was proposed by this methodology, use exactly:
+  "proposed segment can not be found in given files"
 
-Agreed segmentation summary:
+Agreed segmentation methodology:
 {cowork_summary.strip()}
 
 ------------------------------------------------------------
 
 """
+
+    not_found_text = (
+        "proposed segment can not be found in given files"
+        if cowork_summary and cowork_summary.strip()
+        else "Not found in provided materials."
+    )
 
     system = f"""You are a professional consultant supporting a pharmaceutical company.
 {cowork_block}
@@ -50,7 +63,7 @@ STRICT CLASSIFICATION & EXTRACTION PRINCIPLE
 - Evaluate each data point independently against the row definitions below.
 - Do NOT force a data point into a row if it does not strictly match the row definition.
 - If not fully confident that a data point matches, use exactly:
-  "Not found in provided materials."
+  "{not_found_text}"
 
 ------------------------------------------------------------
 
@@ -76,7 +89,7 @@ ROW DEFINITIONS (STRICT)
 
   HARD RULE:
   If explicit age or gender is NOT stated for that segment, return exactly:
-  "Not found in provided materials."
+  "{not_found_text}"
 
   Never use proxy profile information as demographics.
   Never summarize general "Demographic Profiles" sections unless they explicitly contain age or gender.
@@ -114,11 +127,11 @@ For each segment and each row:
 3. Treat each scope component listed in the row definition as an independent search dimension. All components must be verified before concluding completeness.
 4. Apply boundary check for Demographics, Preferences, and Environment:
    - If the statement describes where they practice (e.g., city tier, hospital level, practice size, patient volume), classify as Environment, not Demographics.
-   - Only classify as Preferences if it explicitly refers to interaction with pharmaceutical representatives, otherwise "Not found in provided materials.".
+   - Only classify as Preferences if it explicitly refers to interaction with pharmaceutical representatives, otherwise "{not_found_text}".
    - Do not leave practice size or institutional scale unclassified; these must belong to Environment.
 5. Summarize all valid points into 1-3 concise conclusions.
 6. If no valid evidence exists, use:
-   "Not found in provided materials."
+   "{not_found_text}"
 
 ------------------------------------------------------------
 

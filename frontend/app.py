@@ -3,6 +3,7 @@
 import base64
 import html
 import json
+import markdown
 import os
 import uuid
 from pathlib import Path
@@ -635,10 +636,10 @@ def render_controls_panel(slide_meta: dict, module: str):
                     slide_idx
                 )
                 cowork_guidance = None
-                if cowork_summary and cowork_segments and len(cowork_segments) >= 2:
+                if cowork_summary:
                     cowork_guidance = {
                         "summary": cowork_summary,
-                        "segment_names": cowork_segments,
+                        "segment_names": cowork_segments or [],
                     }
                 with st.spinner("Generating content…"):
                     try:
@@ -783,6 +784,17 @@ def render_chat_panel(slide_meta: dict, module: str):
         }
         @keyframes think-blink { 50% { opacity: 0; } }
         .ai-msg-body { flex: 1; min-width: 0; }
+        /* Markdown-rendered content inside assistant bubbles */
+        .ai-msg.assistant p { margin: 0.25em 0; }
+        .ai-msg.assistant p:first-child { margin-top: 0; }
+        .ai-msg.assistant p:last-child { margin-bottom: 0; }
+        .ai-msg.assistant ul, .ai-msg.assistant ol { margin: 0.35em 0; padding-left: 1.25em; }
+        .ai-msg.assistant li { margin: 0.15em 0; }
+        .ai-msg.assistant code { background: rgba(0,0,0,0.06); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+        .ai-msg.assistant pre { margin: 0.4em 0; padding: 0.5em 0.6em; background: rgba(0,0,0,0.06); border-radius: 6px; overflow-x: auto; font-size: 0.82em; }
+        .ai-msg.assistant pre code { background: none; padding: 0; }
+        .ai-msg.assistant strong { font-weight: 700; }
+        .ai-msg.assistant h1, .ai-msg.assistant h2, .ai-msg.assistant h3 { margin: 0.5em 0 0.25em; font-size: 1em; font-weight: 600; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -822,7 +834,12 @@ def render_chat_panel(slide_meta: dict, module: str):
                 role = msg.get("role", "assistant")
                 css_role = "user" if role == "user" else "assistant"
                 icon = "👤" if role == "user" else "🤖"
-                content = html.escape(str(msg.get("content", ""))).replace("\n", "<br>")
+                raw_content = str(msg.get("content", ""))
+                # Render markdown for assistant messages; escape only for user messages
+                if role == "assistant":
+                    content = markdown.markdown(raw_content, extensions=["nl2br"])
+                else:
+                    content = html.escape(raw_content).replace("\n", "<br>")
                 thinking = msg.get("thinking", "")
                 thinking_html = ""
                 if thinking and role == "assistant":

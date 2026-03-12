@@ -242,14 +242,51 @@ Return the JSON object now:"""
 
     try:
         with stage_scope("feedback_apply"):
-            raw = complete(system, user, max_tokens=2200)
+            raw = complete(system, user, max_tokens=4000)
             raw = raw.strip()
             if "```" in raw:
                 match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
                 if match:
                     raw = match.group(1)
 
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                # LLM truncated mid-JSON (hit token limit). Attempt to salvage
+                # whatever rows were emitted before the cut-off.
+                logger.warning(
+                    "feedback_apply: JSON truncated by LLM, attempting partial recovery"
+                )
+                # Extract column_headers if present
+                hdr_match = re.search(
+                    r'"column_headers"\s*:\s*(\[[^\]]*\])', raw, re.DOTALL
+                )
+                # Extract every complete row already present in table_data
+                rows_match = re.findall(r'\[[^\[\]]*\]', raw)
+                # First match may be column_headers array itself; skip arrays of arrays
+                extracted_rows = []
+                for m in rows_match:
+                    try:
+                        parsed = json.loads(m)
+                        if isinstance(parsed, list) and parsed and not isinstance(parsed[0], list):
+                            extracted_rows.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+
+                partial: dict[str, Any] = {}
+                if hdr_match:
+                    try:
+                        partial["column_headers"] = json.loads(hdr_match.group(1))
+                        # First row in extracted_rows may be the headers list; drop it
+                        if extracted_rows and extracted_rows[0] == partial["column_headers"]:
+                            extracted_rows = extracted_rows[1:]
+                    except json.JSONDecodeError:
+                        pass
+                partial["table_data"] = extracted_rows
+                partial["assistant_message"] = ""
+                if not partial.get("column_headers") and not extracted_rows:
+                    raise  # nothing salvageable – re-raise original error
+                data = partial
             if isinstance(data, list):
                 # Backward compatibility when model returns only table_data list.
                 parsed_headers = existing_headers

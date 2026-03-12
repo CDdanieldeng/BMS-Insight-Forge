@@ -701,15 +701,14 @@ def run_fill(
         # CustomerSegmentationAgent.  Subsequent CS slides hit the cache path
         # below and continue through the standard retrieval flow.
         # When cowork_guidance is provided (from End conversation summary), the
-        # agent skips segment extraction and uses the agreed segments + summary.
+        # agent uses the methodology guide to drive segment identification from data.
         if _has_placeholder_columns(placeholder_cols) and not is_ms_slide3 and _is_cs:
             with stage_scope("customer_segmentation_agent"):
-                use_cowork = cowork_guidance and cowork_guidance.get("summary") and cowork_guidance.get("segment_names")
+                use_cowork = bool(cowork_guidance and cowork_guidance.get("summary"))
                 if use_cowork:
                     logger.info(
-                        "CS agent: using cowork guidance module=%s segments=%s",
+                        "CS agent: using cowork methodology guidance module=%s",
                         module,
-                        cowork_guidance.get("segment_names"),
                     )
                 if module in _segment_name_cache and not use_cowork:
                     # Cache hit: reuse segments, fall through to standard path.
