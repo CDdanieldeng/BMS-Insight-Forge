@@ -27,7 +27,6 @@ TEMPLATE_PATH = os.getenv("TEMPLATE_PPTX_PATH", "/app/example_files/example slid
 
 # API timeouts (configurable via .env)
 TIMEOUT_QUICK = float(os.getenv("TIMEOUT_QUICK", "10"))
-TIMEOUT_KEY_QUESTIONS = float(os.getenv("TIMEOUT_KEY_QUESTIONS", "5"))
 TIMEOUT_INGEST = float(os.getenv("TIMEOUT_INGEST", "60"))
 TIMEOUT_LLM_GENERATION = float(os.getenv("TIMEOUT_LLM_GENERATION", "200"))
 TIMEOUT_FILL_TABLE = float(os.getenv("TIMEOUT_FILL_TABLE", "30"))
@@ -83,7 +82,6 @@ def init_session_state():
         "file_ids_by_module": {m: [] for m in MODULES},
         "filled_slides": set(),
         "table_data_by_slide": {},
-        "key_question_answers": {},
         "column_headers_by_slide": {},
         # Chat history is isolated by slide_idx (no cross-slide memory sharing)
         "chat_history_by_slide": {},
@@ -183,65 +181,9 @@ def _get_cs_context_for_swot() -> tuple[str | None, list[list[str]] | None, list
     return summary, table if table else None, headers if headers else None
 
 
-def fetch_key_questions(module: str) -> list[str]:
-    try:
-        r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=TIMEOUT_KEY_QUESTIONS)
-        if r.ok:
-            return r.json().get("questions", [])
-    except Exception:
-        pass
-    return []
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Module Landing Page  (page index = 0)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _ingest_and_answer(module: str, uploaded_files) -> bool:
-    """
-    Step 1: ingest uploaded files into the retriever store (scoped to this module).
-    Step 2: immediately call LLM to answer key questions for this module.
-    Returns True on success.
-    Files from OTHER modules are unaffected.
-    """
-    # 1. Ingest
-    resp = API_SESSION.post(
-        f"{BACKEND_URL}/retriever/ingest",
-        files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
-        timeout=TIMEOUT_INGEST,
-    )
-    if not resp.ok:
-        st.error(f"Ingest failed: {resp.text}")
-        return False
-
-    data = resp.json()
-    file_ids: list[str] = data.get("file_ids", [])
-    # Store only for this module; leave other modules untouched
-    st.session_state.file_ids_by_module[module] = file_ids
-    # Clear stale answers for THIS module only
-    st.session_state.key_question_answers.pop(module, None)
-
-    for err in data.get("errors", []):
-        st.warning(f"Skipped {err.get('file', '?')}: {err.get('error', '')}")
-
-    if not file_ids:
-        st.warning("No files were successfully ingested.")
-        return False
-
-    # 2. Generate LLM answers for this module
-    try:
-        ans_r = API_SESSION.post(
-            f"{BACKEND_URL}/generation/key-answers",
-            json={"module": module, "file_ids": file_ids},
-            timeout=TIMEOUT_LLM_GENERATION,
-        )
-        ans_r.raise_for_status()
-        st.session_state.key_question_answers[module] = ans_r.json().get("answers", [])
-    except Exception as e:
-        st.warning(f"Files ingested, but answer generation failed: {e}")
-
-    return True
-
 
 def _ingest_only(module: str, uploaded_files) -> bool:
     """
@@ -273,14 +215,12 @@ def _ingest_only(module: str, uploaded_files) -> bool:
 
 
 def render_landing_page(module: str, slides: list):
-    """Module home page: hero header, Q&A panel, file upload panel."""
+    """Module home page: hero card only (module separator). Navigator/progress bar in parent."""
 
     icon = MODULE_ICONS.get(module, "📋")
     desc = MODULE_DESC.get(module, "")
     n_slides = len(slides)
     n_filled = sum(1 for s in slides if s["idx"] in st.session_state.filled_slides)
-    answers = st.session_state.key_question_answers.get(module, [])
-    has_answers = bool(answers)
 
     # ── Module hero header ─────────────────────────────────────────────────
     st.markdown(
@@ -299,33 +239,6 @@ def render_landing_page(module: str, slides: list):
             border-radius: 20px; padding: 0.25rem 0.9rem;
             font-size: 0.85rem; margin-top: 1rem;
         }}
-        .kq-wrap {{ margin-bottom: 1rem; }}
-        .kq-card {{
-            background: #f8f9ff; border: 1px solid #e2e6f3; border-radius: 12px;
-            padding: 1rem 1.2rem; margin-bottom: 0.75rem;
-        }}
-        .kq-card.answered {{ background: #f0faf4; border-color: #b7dfc8; }}
-        .kq-header {{ display: flex; align-items: flex-start; gap: 0.6rem; margin-bottom: 0; }}
-        .kq-num {{
-            flex-shrink: 0; background: #1a1a2e; color: white; border-radius: 50%;
-            width: 24px; height: 24px; text-align: center; line-height: 24px;
-            font-size: 0.75rem; font-weight: 700;
-        }}
-        .kq-num.done {{ background: #1a7a4a; }}
-        .kq-text  {{ font-size: 0.95rem; color: #2c2c4a; line-height: 1.5; font-weight: 600; }}
-        .kq-answer {{
-            margin-top: 0.6rem; padding-top: 0.6rem;
-            border-top: 1px solid #d0e8d8;
-            font-size: 0.9rem; color: #2a4a35; line-height: 1.6;
-        }}
-        .file-panel {{
-            background: #fafafa; border: 1px solid #e8e8f0; border-radius: 14px;
-            padding: 1.4rem 1.4rem 1rem;
-        }}
-        .step-label {{
-            font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-            letter-spacing: 1px; color: #888; margin-bottom: 0.3rem;
-        }}
         </style>
         <div class="lp-hero">
             <div class="lp-icon">{icon}</div>
@@ -336,128 +249,6 @@ def render_landing_page(module: str, slides: list):
         """,
         unsafe_allow_html=True,
     )
-
-    # ── Two-column body ────────────────────────────────────────────────────
-    col_q, col_f = st.columns([3, 2], gap="large")
-
-    # ── Left: Key Questions + LLM Answers ─────────────────────────────────
-    with col_q:
-        st.markdown("#### 🔑 Key Business Questions")
-
-        if not has_answers:
-            st.caption(
-                "Upload your support documents on the right and click **Ingest & Analyze** "
-                "— the AI will answer each question based on your files."
-            )
-
-        questions = fetch_key_questions(module)
-        answer_map = {item.get("question", ""): item.get("answer", "") for item in answers}
-
-        if questions:
-            cards_html = '<div class="kq-wrap">'
-            for i, q in enumerate(questions, 1):
-                import html as _html
-                ans_text = answer_map.get(q, "")
-                answered = bool(
-                    ans_text and ans_text != "Insufficient evidence in uploaded documents."
-                )
-                card_cls = "kq-card answered" if answered else "kq-card"
-                num_cls = "kq-num done" if answered else "kq-num"
-                answer_part = (
-                    f'<div class="kq-answer">💡 {_html.escape(ans_text)}</div>'
-                    if ans_text
-                    else ""
-                )
-                cards_html += (
-                    f'<div class="{card_cls}">'
-                    f'<div class="kq-header">'
-                    f'<span class="{num_cls}">{i}</span>'
-                    f'<span class="kq-text">{_html.escape(q)}</span>'
-                    f"</div>"
-                    f"{answer_part}"
-                    f"</div>"
-                )
-            cards_html += "</div>"
-            st.markdown(cards_html, unsafe_allow_html=True)
-        else:
-            st.caption("(Could not load questions — is the backend running?)")
-
-    # ── Right: File upload + analyze ──────────────────────────────────────
-    with col_f:
-        st.markdown("#### 📂 Support Files")
-
-        module_fids = _module_file_ids(module)
-
-        # Status badge
-        if module_fids:
-            status_label = (
-                f"✅ {len(module_fids)} file(s) ingested"
-                + (" · answers ready" if has_answers else " · answers not yet generated")
-            )
-            st.success(status_label)
-
-        uploaded = st.file_uploader(
-            "Upload .pptx/.docx/.doc/.md support documents",
-            type=["pptx", "docx", "doc", "md"],
-            accept_multiple_files=True,
-            key=f"uploader_{module}",
-            help="Files are scoped to this module and will not affect other modules.",
-        )
-
-        if uploaded:
-            btn_label = f"Ingest & Analyze ({len(uploaded)} file{'s' if len(uploaded) > 1 else ''})"
-            if st.button(
-                btn_label,
-                type="primary",
-                use_container_width=True,
-                key=f"ingest_{module}",
-            ):
-                with st.spinner(
-                    "Step 1/2 — Ingesting files…  \n"
-                    "Step 2/2 — AI is answering key questions…"
-                ):
-                    ok = _ingest_and_answer(module, uploaded)
-                if ok:
-                    _rerun_in_module(module)
-
-        # Re-generate answers without re-uploading
-        elif module_fids and not has_answers:
-            st.caption("Files already ingested. Generate answers:")
-            if st.button(
-                "Generate Key Question Answers",
-                use_container_width=True,
-                key=f"regen_answers_{module}",
-            ):
-                with st.spinner("AI is answering key questions from uploaded documents…"):
-                    try:
-                        ans_r = API_SESSION.post(
-                            f"{BACKEND_URL}/generation/key-answers",
-                            json={"module": module, "file_ids": module_fids},
-                            timeout=TIMEOUT_LLM_GENERATION,
-                        )
-                        ans_r.raise_for_status()
-                        st.session_state.key_question_answers[module] = (
-                            ans_r.json().get("answers", [])
-                        )
-                        _rerun_in_module(module)
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
-
-        # Navigate to slides
-        if n_slides:
-            st.divider()
-            ready = bool(module_fids)
-            if not ready:
-                st.caption("⬆ Ingest support files before filling slides.")
-            if st.button(
-                "Start filling slides →",
-                type="primary" if ready else "secondary",
-                use_container_width=True,
-                key=f"goto_slides_{module}",
-                disabled=not ready,
-            ):
-                st.session_state.current_page_by_module[module] = 1
-                _rerun_in_module(module)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -733,9 +524,6 @@ def render_chat_panel(slide_meta: dict, module: str):
     chat_history = _get_slide_chat_history(slide_idx)
     cowork_ready = st.session_state.setdefault("cowork_ready_by_slide", {}).get(slide_idx, False)
     cowork_draft = st.session_state.setdefault("cowork_draft_by_slide", {}).get(slide_idx, {})
-    cowork_direct_docs = st.session_state.setdefault("cowork_direct_docs_count_by_slide", {}).get(
-        slide_idx, 0
-    )
 
     st.markdown(
         """
@@ -948,61 +736,6 @@ def render_chat_panel(slide_meta: dict, module: str):
                             st.session_state[input_key] = cleaned_spoken
                             last_voice[slide_idx] = cleaned_spoken
                             st.rerun()
-        if chat_mode == "cowork":
-            web_key = f"cowork_web_permission_{slide_idx}"
-            if web_key not in st.session_state:
-                st.session_state[web_key] = False
-            st.checkbox(
-                "Allow web search placeholder (no live search in this iteration)",
-                key=web_key,
-            )
-            st.caption(f"Cowork direct files in memory: {cowork_direct_docs}")
-            upload_label = (
-                "Upload market definition & competitor analysis (pptx, docx, pdf, md)"
-                if module == "SWOT Analysis"
-                else "Upload files to cowork memory (no retriever ingest)"
-            )
-            direct_files = st.file_uploader(
-                upload_label,
-                type=["pptx", "docx", "doc", "pdf", "md"],
-                accept_multiple_files=True,
-                key=f"cowork_direct_upload_{slide_idx}",
-            )
-            if direct_files:
-                if st.button(
-                    f"Upload {len(direct_files)} file{'s' if len(direct_files) > 1 else ''} to cowork",
-                    use_container_width=True,
-                    key=f"cowork_direct_upload_btn_{slide_idx}",
-                ):
-                    sess_map = st.session_state.setdefault("cowork_session_id_by_slide", {})
-                    if slide_idx not in sess_map:
-                        sess_map[slide_idx] = str(uuid.uuid4())
-                    try:
-                        upload_endpoint = (
-                            f"{BACKEND_URL}/cowork-agent/swot/upload-files"
-                            if module == "SWOT Analysis"
-                            else f"{BACKEND_URL}/cowork-agent/cs/upload-files"
-                        )
-                        upload_r = API_SESSION.post(
-                            upload_endpoint,
-                            data={
-                                "session_id": sess_map[slide_idx],
-                                "module": module,
-                            },
-                            files=[("files", (f.name, f.getvalue())) for f in direct_files],
-                            timeout=TIMEOUT_INGEST,
-                        )
-                        upload_r.raise_for_status()
-                        upload_payload = upload_r.json()
-                        st.session_state.setdefault("cowork_direct_docs_count_by_slide", {})[
-                            slide_idx
-                        ] = int(upload_payload.get("total_docs_in_memory", 0))
-                        st.success(
-                            f"Uploaded {upload_payload.get('uploaded_count', 0)} file(s) to cowork memory."
-                        )
-                        _rerun_in_module(module)
-                    except Exception as e:
-                        st.error(f"Cowork upload failed: {e}")
     # Send, Clear, and (in cowork mode) End conversation in one horizontal row
     if chat_mode == "cowork":
         action_l, action_m, action_r = st.columns(3)
@@ -1294,7 +1027,7 @@ def render_chat_panel(slide_meta: dict, module: str):
 def render_module_tab(module: str, slides: list):
     """
     Page layout within a module tab:
-      page 0          → Landing page (key questions + file upload)
+      page 0          → Landing page (support files + navigate to slides)
       page 1 .. N     → Slide fill pages
     """
     n_slides = len(slides)
@@ -1445,8 +1178,8 @@ def main():
             </style>
             <div class="if-title">Insight Forge</div>
             <div class="if-desc">
-                GenAI-powered business plan slide filling. Answer key business questions,
-                upload support documents, and let AI populate every module of your deck.
+                GenAI-powered business plan slide filling. Upload support documents
+                and let AI populate every module of your deck.
             </div>
             <div class="if-modules">
             """
