@@ -407,6 +407,11 @@ def generate_table_content(
         columns = table_structure.get("columns", [])
         indexes = table_structure.get("indexes", [])
 
+        # SWOT: 4 columns (S,W,O,T), exactly 1 data row — different from CS segment tables
+        is_swot = (module or "").strip().lower() == "swot analysis"
+        if is_swot and not indexes:
+            indexes = ["SWOT"]  # Exactly 1 row to fill
+
         # Determine effective column labels for the LLM prompt
         if segment_names:
             effective_columns = [""] + segment_names  # col 0 is the row-label corner
@@ -443,6 +448,29 @@ def generate_table_content(
                 data_columns,
             )
             retriever_chars_in_prompt = len(retriever_content or "")
+        elif is_swot:
+            # ── SWOT: 4 columns, 1 data row — different from CS segment tables ─────
+            # Content comes from Customer Segmentation (if in context) + uploaded files
+            questions = get_questions_for_module(module)
+            context_for_prompt = retriever_content
+            retriever_chars_in_prompt = len(context_for_prompt)
+            col_guide = ", ".join(c for c in data_columns if c)
+            system = (
+                "You are a business analyst. Fill the SWOT table based on the provided context.\n"
+                "The SWOT table has 4 columns (Strengths, Weaknesses, Opportunities, Threats) and exactly 1 data row. "
+                "Unlike segment tables, there are no row indexes — the four column names are the ONLY guide.\n"
+                "Synthesize content for each of the 4 cells from: (1) Customer Segmentation tables/summary if present, "
+                "(2) uploaded market definition and competitor analysis documents.\n"
+                "Output a JSON array with exactly ONE inner array of 4 values: [strengths_text, weaknesses_text, opportunities_text, threats_text].\n"
+                "Use concise, professional language. If context is insufficient, provide reasonable placeholder text.\n"
+                "Output ONLY valid JSON, no markdown or explanation."
+            )
+            user = (
+                f"Context (Customer Segmentation + uploaded market/competitor documents):\n{context_for_prompt}\n\n"
+                + (f"Key business questions for {module}:\n" + "\n".join(f"- {q}" for q in questions) + "\n\n" if questions else "")
+                + f"Table columns (extract evidence for each): {col_guide}\n\n"
+                "Generate exactly 1 row with 4 values. Format: [[\"strengths\",\"weaknesses\",\"opportunities\",\"threats\"]]"
+            )
         else:
             # ── Generic fallback prompt ───────────────────────────────────────────
             questions = get_questions_for_module(module)
@@ -694,6 +722,7 @@ def run_fill(
         placeholder_cols = [c.strip() for c in columns if c.strip()]
         is_ms_slide3 = _is_messaging_strategy_slide3(module, indexes)
         _is_cs = _normalize_label(module) == "customer segmentation"
+        is_swot = _normalize_label(module) == "swot analysis"
 
         # ── Customer Segmentation Agent path ──────────────────────────────────
         # When the CS module has placeholder columns (first CS slide), delegate
@@ -866,6 +895,36 @@ def run_fill(
                     )
                     logger.info(
                         "Messaging Strategy slide3 has no prior table cache slide_idx=%d; using uploaded materials as fallback",
+                        slide_idx,
+                    )
+
+        # ── Context composition for SWOT (CS tables + uploaded files) ────────────
+        if is_swot:
+            with stage_scope("context_merge_swot"):
+                prior_table_context = _build_prior_table_primary_context(slide_idx)
+                uploaded_materials_context = content
+                if prior_table_context:
+                    content = (
+                        "PRIMARY INPUT: CUSTOMER SEGMENTATION (prior slides)\n"
+                        f"{prior_table_context}\n\n"
+                        "SECONDARY INPUT: UPLOADED MARKET DEFINITION & COMPETITOR ANALYSIS\n"
+                        f"{uploaded_materials_context}"
+                    )
+                    logger.info(
+                        "SWOT context merged with prior CS tables slide_idx=%d prior_chars=%d uploaded_chars=%d",
+                        slide_idx,
+                        len(prior_table_context),
+                        len(uploaded_materials_context),
+                    )
+                else:
+                    content = (
+                        "PRIMARY INPUT: CUSTOMER SEGMENTATION\n"
+                        "(none — fill CS slides first for best results)\n\n"
+                        "SECONDARY INPUT: UPLOADED MARKET DEFINITION & COMPETITOR ANALYSIS\n"
+                        f"{uploaded_materials_context}"
+                    )
+                    logger.info(
+                        "SWOT slide_idx=%d has no prior CS cache; using uploaded materials only",
                         slide_idx,
                     )
 

@@ -77,6 +77,7 @@ async def fill_table_endpoint(
     file: UploadFile = File(...),
     table_data_b64: str = Form(...),
     column_headers_b64: str | None = Form(None),
+    module: str | None = Form(None),
 ) -> dict[str, str]:
     """
     Fill table and return updated pptx bytes (base64 encoded in response).
@@ -85,6 +86,7 @@ async def fill_table_endpoint(
                         (no header row, no index column).
     column_headers_b64: optional base64-encoded JSON array of segment name strings
                         that replace placeholder column headers (row 0, cols 1+).
+    module:             optional module name; when "SWOT Analysis", table has no index column.
     """
     import json
 
@@ -113,8 +115,14 @@ async def fill_table_endpoint(
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid column_headers: {e}")
 
+    has_index_column = (module or "").strip().lower() != "swot analysis"
+
     try:
-        result_bytes = fill_table(content, slide_idx, table_data, column_headers=column_headers)
+        result_bytes = fill_table(
+            content, slide_idx, table_data,
+            column_headers=column_headers,
+            has_index_column=has_index_column,
+        )
         return {"pptx_base64": base64.b64encode(result_bytes).decode("utf-8")}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

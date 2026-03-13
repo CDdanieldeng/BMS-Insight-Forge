@@ -106,6 +106,20 @@ Output ONLY one concise English search query, no explanation."""
         )
         return "messaging_strategy_table_only", system, user
 
+    if normalized_module == "swot analysis":
+        system = """You are a query enhancer for pharmaceutical business planning.
+Your task is to convert the SWOT table structure into a concise retrieval query.
+SWOT tables use ONLY the four column names as the guide: Strengths, Weaknesses, Opportunities, Threats.
+Do NOT use row indexes. Focus search on finding evidence for each of the four SWOT quadrants.
+Output ONLY one concise English search query, no explanation."""
+        user = (
+            f"Module: {module}\n"
+            "Business context: We are preparing a business plan for a pharmaceutical company.\n"
+            f"Table columns (use these as the main guide): {columns}\n"
+            "Generate the search query now:"
+        )
+        return "swot_table_only", system, user
+
     system = """You are a search query enhancer. Given the business key questions and table structure.
 Output a single, concise search query (in English) that would help retrieve relevant content to answer these questions and fill the table.
 Output ONLY the search query, no explanation."""
@@ -146,6 +160,9 @@ def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
             if normalized_module in {"customer segmentation", "messaging strategy"}:
                 question_query = "; ".join(q.strip() for q in questions if q and q.strip())
                 final_query = "; ".join(part for part in [question_query, table_query] if part).strip()
+            elif normalized_module == "swot analysis":
+                question_query = "; ".join(q.strip() for q in questions if q and q.strip())
+                final_query = "; ".join(part for part in [question_query, table_query] if part).strip()
             else:
                 final_query = table_query
 
@@ -162,7 +179,7 @@ def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
             return final_query
         except Exception as e:
             logger.warning("LLM enhance query failed, using fallback module=%s err=%s", module, e)
-            if normalized_module in {"customer segmentation", "messaging strategy"}:
+            if normalized_module in {"customer segmentation", "messaging strategy", "swot analysis"}:
                 final_query = "; ".join(q.strip() for q in questions if q and q.strip())
             else:
                 final_query = " ".join(questions[:2]) if questions else ""

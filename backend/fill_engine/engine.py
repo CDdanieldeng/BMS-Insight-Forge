@@ -115,6 +115,10 @@ def get_slide_info(pptx_bytes: bytes | None = None, pptx_path: str | Path | None
 
         if is_fillable:
             structure = _extract_table_structure(tables[0].table)
+            # SWOT uses only the four column names (S,W,O,T) as guide; ignore indexes.
+            if current_module == "SWOT Analysis":
+                structure = dict(structure)
+                structure["indexes"] = []
             entry["table_structure"] = structure
 
         result.append(entry)
@@ -200,19 +204,23 @@ def fill_table(
     slide_idx: int,
     table_data: list[list[str]],
     column_headers: list[str] | None = None,
+    *,
+    has_index_column: bool = True,
 ) -> bytes:
     """
     Fill table cells with table_data and (optionally) replace column headers.
 
-    column_headers: real segment names that replace placeholder header cells
-                    (row 0, cols 1+).  Must match the number of data columns.
+    column_headers: real segment names that replace placeholder header cells.
     table_data:     2-D list of cell values.
-                    table_data[r] = values for data row r+1 (skips header).
-                    table_data[r][c] = value for col c+1 (skips index col).
+    has_index_column: If True (default), col 0 is row-label corner; headers/data
+                      go to cols 1+. If False (e.g. SWOT), all cols are data; use 0-based.
     """
     prs = load_presentation(pptx_bytes=pptx_bytes)
     if slide_idx < 0 or slide_idx >= len(prs.slides):
         raise ValueError(f"Invalid slide_idx: {slide_idx}")
+
+    header_col_offset = 1 if has_index_column else 0
+    data_col_offset = 1 if has_index_column else 0
 
     slide = prs.slides[slide_idx]
     for shape in slide.shapes:
@@ -221,10 +229,10 @@ def fill_table(
             num_rows = len(tbl.rows)
             num_cols = len(tbl.columns)
 
-            # ── Write column headers (row 0, cols 1+) ─────────────────────
+            # ── Write column headers ─────────────────────────────────────
             if column_headers:
                 for c, header in enumerate(column_headers):
-                    col_idx = c + 1  # col 0 is the row-label corner
+                    col_idx = c + header_col_offset
                     if col_idx >= num_cols:
                         break
                     cell = tbl.cell(0, col_idx)
@@ -237,13 +245,13 @@ def fill_table(
                         extra={"slide_idx": slide_idx},
                     )
 
-            # ── Write data cells (rows 1+, cols 1+) ───────────────────────
+            # ── Write data cells (rows 1+) ─────────────────────────────────
             for r, row_data in enumerate(table_data):
                 data_row_idx = r + 1  # skip header row
                 if data_row_idx >= num_rows:
                     break
                 for c, value in enumerate(row_data):
-                    data_col_idx = c + 1  # skip index column
+                    data_col_idx = c + data_col_offset
                     if data_col_idx >= num_cols:
                         break
                     cell = tbl.cell(data_row_idx, data_col_idx)

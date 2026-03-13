@@ -51,18 +51,21 @@ def _build_sub_queries(seed_query: str, module: str, table_structure: dict[str, 
     idxs = indexes[:6]
     subs: list[str] = []
 
-    # 1) Seed + single column — retrieval by dimension (e.g. channel, preference).
+    # SWOT: use only the four column names (Strengths, Weaknesses, Opportunities, Threats) as guide.
+    is_swot = (module or "").strip().lower() == "swot analysis"
+
+    # 1) Seed + single column — retrieval by dimension (e.g. channel, preference, SWOT quadrant).
     for col in cols:
         subs.append(f"{seed_query}; {col}")
 
-    # 2) Seed + single index — retrieval by segment/row (e.g. Safe Player, segment name).
-    for idx in idxs:
-        subs.append(f"{seed_query}; {idx}")
-
-    # 3) Seed + column + index — targeted combination (fewer to keep diversity).
-    for col in cols[:3]:
-        for idx in idxs[:3]:
-            subs.append(f"{seed_query}; {col}; {idx}")
+    if not is_swot:
+        # 2) Seed + single index — retrieval by segment/row (e.g. Safe Player, segment name).
+        for idx in idxs:
+            subs.append(f"{seed_query}; {idx}")
+        # 3) Seed + column + index — targeted combination (fewer to keep diversity).
+        for col in cols[:3]:
+            for idx in idxs[:3]:
+                subs.append(f"{seed_query}; {col}; {idx}")
 
     # 4) Module context when present.
     if module:
@@ -284,8 +287,14 @@ def run_evidence_pipeline(
 
         with stage_scope("evidence_compress_and_judge"):
             snippets: list[dict[str, Any]] = []
-            row_defs = [str(v) for v in (table_structure.get("indexes") or [])]
-            segment_terms = [str(v) for v in (table_structure.get("columns") or [])[1:]]
+            # SWOT: use column names as guide, not row indexes
+            is_swot = (module or "").strip().lower() == "swot analysis"
+            if is_swot:
+                row_defs = [str(v) for v in (table_structure.get("columns") or []) if str(v).strip()]
+                segment_terms = [str(v) for v in row_defs]
+            else:
+                row_defs = [str(v) for v in (table_structure.get("indexes") or [])]
+                segment_terms = [str(v) for v in (table_structure.get("columns") or [])[1:]]
             reject_details: list[str] = []
             for chunk in confirmed[: config.max_to_compress]:
                 compressed = compress_chunk(

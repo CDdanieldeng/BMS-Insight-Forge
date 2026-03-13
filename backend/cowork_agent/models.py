@@ -117,6 +117,10 @@ class CoworkTurnRequest(BaseModel):
     conversation_history: list[dict[str, str]] | None = None
     allow_web_search: bool = False
     action: str | None = None
+    # Optional upstream context for SWOT (from Customer Segmentation cowork)
+    cs_cowork_summary: str | None = None
+    cs_filled_table: list[list[str]] | None = None
+    cs_filled_headers: list[str] | None = None
 
 
 class CoworkTurnResponse(BaseModel):

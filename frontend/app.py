@@ -168,6 +168,21 @@ def get_slides_by_module(slide_info: list) -> dict[str, list]:
     return grouped
 
 
+def _get_cs_context_for_swot() -> tuple[str | None, list[list[str]] | None, list[str] | None]:
+    """Gather CS cowork summary and filled table from Customer Segmentation slides."""
+    slide_info = st.session_state.get("slide_info", [])
+    slides_by_module = get_slides_by_module(slide_info)
+    cs_slides = slides_by_module.get("Customer Segmentation", [])
+    if not cs_slides:
+        return None, None, None
+    # Use first CS slide
+    cs_slide_idx = cs_slides[0]["idx"]
+    summary = st.session_state.setdefault("cowork_summary_by_slide", {}).get(cs_slide_idx)
+    table = st.session_state.setdefault("table_data_by_slide", {}).get(cs_slide_idx, [])
+    headers = st.session_state.setdefault("column_headers_by_slide", {}).get(cs_slide_idx, [])
+    return summary, table if table else None, headers if headers else None
+
+
 def fetch_key_questions(module: str) -> list[str]:
     try:
         r = API_SESSION.get(f"{BACKEND_URL}/generation/key-questions/{module}", timeout=TIMEOUT_KEY_QUESTIONS)
@@ -454,7 +469,14 @@ def render_slide_content(slide_meta: dict):
     filled = slide_idx in st.session_state.filled_slides
     table_structure = slide_meta.get("table_structure", {})
     row_labels = table_structure.get("indexes", [])
-    template_col_names = table_structure.get("columns", [])[1:]  # skip corner cell
+    # SWOT has no index column; all 4 columns are data columns. CS/others have corner cell.
+    module = slide_meta.get("module", "")
+    is_swot = (module or "").strip().lower() == "swot analysis"
+    template_col_names = (
+        table_structure.get("columns", [])
+        if is_swot
+        else table_structure.get("columns", [])[1:]  # skip corner cell
+    )
 
     if filled:
         table_data = st.session_state.table_data_by_slide.get(slide_idx, [])
@@ -672,6 +694,7 @@ def render_controls_panel(slide_meta: dict, module: str):
                     try:
                         form_data: dict = {
                             "slide_idx": slide_idx,
+                            "module": module,
                             "table_data_b64": base64.b64encode(
                                 json.dumps(table_data).encode()
                             ).decode(),
@@ -811,12 +834,19 @@ def render_chat_panel(slide_meta: dict, module: str):
     with st.container(border=True):
         # Scrollable message history (larger chat area)
         with st.container(height=440, border=False):
-            # Always show default first bot bubble in CS cowork mode (stays visible even after user talks)
+            # Always show default first bot bubble in cowork mode (CS or SWOT)
+            default_bot_msg = None
             if module == "Customer Segmentation" and current_mode == "cowork":
                 default_bot_msg = (
                     "You are now in the Customer Segmentation module for BP insight generation. "
                     "Let's chat and co-work on the guideline to do customer segmentation."
                 )
+            elif module == "SWOT Analysis" and current_mode == "cowork":
+                default_bot_msg = (
+                    "You are now in the SWOT Analysis module for BP insight generation. "
+                    "Is there anything you'd like me to emphasise when doing the analysis? Let's align and co-work on it."
+                )
+            if default_bot_msg:
                 content_escaped = html.escape(default_bot_msg).replace("\n", "<br>")
                 st.markdown(
                     f"<div class='ai-msg-wrap assistant'>"
@@ -824,7 +854,11 @@ def render_chat_panel(slide_meta: dict, module: str):
                     f"<div class='ai-msg assistant'>{content_escaped}</div></div>",
                     unsafe_allow_html=True,
                 )
-            if not chat_history and not (module == "Customer Segmentation" and current_mode == "cowork"):
+            has_cowork_default = (
+                (module == "Customer Segmentation" and current_mode == "cowork")
+                or (module == "SWOT Analysis" and current_mode == "cowork")
+            )
+            if not chat_history and not has_cowork_default:
                 st.markdown(
                     "<div style='text-align:center;color:#aaa;padding:2.5rem 0;"
                     "font-size:0.88rem'>Choose cowork mode to get step-by-step guidance, or fill the slide then refine it with AI.</div>",
@@ -866,7 +900,7 @@ def render_chat_panel(slide_meta: dict, module: str):
             st.session_state[mode_key] = "modify"
         mode_col, input_col, voice_col = st.columns([1, 3.6, 0.8], gap="small")
         with mode_col:
-            if module == "Customer Segmentation":
+            if module == "Customer Segmentation" or module == "SWOT Analysis":
                 mode_options = {"modify": "🛠", "ask": "❓", "cowork": "🤝"}
             else:
                 mode_options = {"modify": "🛠", "ask": "❓"}
@@ -883,7 +917,10 @@ def render_chat_panel(slide_meta: dict, module: str):
                 key=input_key,
                 placeholder=(
                     "Collaborate with AI to complete CS step by step..."
-                    if chat_mode == "cowork"
+                    if chat_mode == "cowork" and module == "Customer Segmentation"
+                    else
+                    "Align on SWOT analysis emphasis..."
+                    if chat_mode == "cowork" and module == "SWOT Analysis"
                     else
                     "Ask question only (no table changes)..."
                     if chat_mode == "ask"
@@ -920,8 +957,13 @@ def render_chat_panel(slide_meta: dict, module: str):
                 key=web_key,
             )
             st.caption(f"Cowork direct files in memory: {cowork_direct_docs}")
+            upload_label = (
+                "Upload market definition & competitor analysis (pptx, docx, pdf, md)"
+                if module == "SWOT Analysis"
+                else "Upload files to cowork memory (no retriever ingest)"
+            )
             direct_files = st.file_uploader(
-                "Upload files to cowork memory (no retriever ingest)",
+                upload_label,
                 type=["pptx", "docx", "doc", "pdf", "md"],
                 accept_multiple_files=True,
                 key=f"cowork_direct_upload_{slide_idx}",
@@ -936,8 +978,13 @@ def render_chat_panel(slide_meta: dict, module: str):
                     if slide_idx not in sess_map:
                         sess_map[slide_idx] = str(uuid.uuid4())
                     try:
+                        upload_endpoint = (
+                            f"{BACKEND_URL}/cowork-agent/swot/upload-files"
+                            if module == "SWOT Analysis"
+                            else f"{BACKEND_URL}/cowork-agent/cs/upload-files"
+                        )
                         upload_r = API_SESSION.post(
-                            f"{BACKEND_URL}/cowork-agent/cs/upload-files",
+                            upload_endpoint,
                             data={
                                 "session_id": sess_map[slide_idx],
                                 "module": module,
@@ -1002,6 +1049,7 @@ def render_chat_panel(slide_meta: dict, module: str):
                         "table_data_b64": base64.b64encode(
                             json.dumps(draft_data).encode()
                         ).decode(),
+                        "module": module,
                     }
                     if draft_headers:
                         fill_payload["column_headers_b64"] = base64.b64encode(
@@ -1033,19 +1081,33 @@ def render_chat_panel(slide_meta: dict, module: str):
             sess_map[slide_idx] = str(uuid.uuid4())
         with st.spinner("Generating summary…"):
             try:
+                chat_endpoint = (
+                    f"{BACKEND_URL}/cowork-agent/swot/chat"
+                    if module == "SWOT Analysis"
+                    else f"{BACKEND_URL}/cowork-agent/cs/chat"
+                )
+                end_payload = {
+                    "session_id": sess_map[slide_idx],
+                    "module": module,
+                    "slide_idx": slide_idx,
+                    "file_ids": module_fids,
+                    "table_structure": slide_meta.get("table_structure") or {},
+                    "user_message": "",
+                    "conversation_history": list(chat_history),
+                    "allow_web_search": False,
+                    "action": "end_conversation",
+                }
+                if module == "SWOT Analysis":
+                    cs_summary, cs_table, cs_headers = _get_cs_context_for_swot()
+                    if cs_summary:
+                        end_payload["cs_cowork_summary"] = cs_summary
+                    if cs_table:
+                        end_payload["cs_filled_table"] = cs_table
+                    if cs_headers:
+                        end_payload["cs_filled_headers"] = cs_headers
                 r = API_SESSION.post(
-                    f"{BACKEND_URL}/cowork-agent/cs/chat",
-                    json={
-                        "session_id": sess_map[slide_idx],
-                        "module": module,
-                        "slide_idx": slide_idx,
-                        "file_ids": module_fids,
-                        "table_structure": slide_meta.get("table_structure") or {},
-                        "user_message": "",
-                        "conversation_history": list(chat_history),
-                        "allow_web_search": False,
-                        "action": "end_conversation",
-                    },
+                    chat_endpoint,
+                    json=end_payload,
                     timeout=TIMEOUT_LLM_GENERATION,
                 )
                 r.raise_for_status()
@@ -1058,7 +1120,10 @@ def render_chat_panel(slide_meta: dict, module: str):
                     slide_idx
                 ] = seg_names if isinstance(seg_names, list) else []
                 st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = input_nonce + 1
-                st.success("Conversation ended. Summary added to chat. Use Fill Slide to apply this guidance.")
+                st.success(
+                    "Conversation ended. Summary added to chat. "
+                    + ("Use Fill Slide to apply this guidance." if module == "Customer Segmentation" else "Summary will guide downstream SWOT generation.")
+                )
                 _rerun_in_module(module)
             except Exception as e:
                 st.error(f"End conversation failed: {e}")
@@ -1099,18 +1164,32 @@ def render_chat_panel(slide_meta: dict, module: str):
                 if slide_idx not in sess_map:
                     sess_map[slide_idx] = str(uuid.uuid4())
                 web_allowed = bool(st.session_state.get(f"cowork_web_permission_{slide_idx}", False))
+                chat_endpoint = (
+                    f"{BACKEND_URL}/cowork-agent/swot/chat"
+                    if module == "SWOT Analysis"
+                    else f"{BACKEND_URL}/cowork-agent/cs/chat"
+                )
+                chat_payload = {
+                    "session_id": sess_map[slide_idx],
+                    "module": module,
+                    "slide_idx": slide_idx,
+                    "file_ids": module_fids,
+                    "table_structure": table_structure or {},
+                    "user_message": clean_user_msg,
+                    "conversation_history": history_snapshot,
+                    "allow_web_search": web_allowed,
+                }
+                if module == "SWOT Analysis":
+                    cs_summary, cs_table, cs_headers = _get_cs_context_for_swot()
+                    if cs_summary:
+                        chat_payload["cs_cowork_summary"] = cs_summary
+                    if cs_table:
+                        chat_payload["cs_filled_table"] = cs_table
+                    if cs_headers:
+                        chat_payload["cs_filled_headers"] = cs_headers
                 r = API_SESSION.post(
-                    f"{BACKEND_URL}/cowork-agent/cs/chat",
-                    json={
-                        "session_id": sess_map[slide_idx],
-                        "module": module,
-                        "slide_idx": slide_idx,
-                        "file_ids": module_fids,
-                        "table_structure": table_structure or {},
-                        "user_message": clean_user_msg,
-                        "conversation_history": history_snapshot,
-                        "allow_web_search": web_allowed,
-                    },
+                    chat_endpoint,
+                    json=chat_payload,
                     timeout=TIMEOUT_LLM_GENERATION,
                 )
             else:
@@ -1165,6 +1244,7 @@ def render_chat_panel(slide_meta: dict, module: str):
             if chat_mode != "cowork" and resolved_mode == "modify" and updated and st.session_state.pptx_bytes:
                 fill_payload = {
                     "slide_idx": slide_idx,
+                    "module": module,
                     "table_data_b64": base64.b64encode(
                         json.dumps(updated).encode()
                     ).decode(),
