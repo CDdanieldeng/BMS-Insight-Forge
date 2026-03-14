@@ -909,7 +909,9 @@ class CustomerSegmentationAgent:
             segments = [s for s in segments if s][:n_segments]
             while len(segments) < MIN_SEGMENTS:
                 segments.append(f"Segment {len(segments) + 1}")
-            segments = _mark_segments_missing_in_uploaded_files(segments, synth_content)
+            # Do NOT call _mark_segments_missing_in_uploaded_files here: methodology-guided
+            # synthesis produces inferred labels (e.g. "Efficacy-Driven Pioneer") that
+            # summarize evidence conceptually; they are not verbatim strings from the docs.
 
             logger.info(
                 "CS agent: cowork methodology-guided segments resolved module=%s segments=%s",

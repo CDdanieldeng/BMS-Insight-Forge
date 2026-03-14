@@ -403,7 +403,7 @@ def render_controls_panel(slide_meta: dict, module: str):
     ):
         new_files = st.file_uploader(
             "Replace/add files for this module",
-            type=["pptx", "docx", "doc", "md"],
+            type=["pptx", "docx", "doc", "md", "pdf"],
             accept_multiple_files=True,
             key=f"slide_uploader_{slide_idx}",
             help="New upload replaces this module's current file set.",
