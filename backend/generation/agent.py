@@ -344,7 +344,7 @@ Return the JSON object now:"""
         raise
 
 
-def answer_question(
+def answer_question(  # decay: ask mode scheduled for removal
     module: str,
     current_content: list[list[str]],
     table_structure: dict[str, Any],
@@ -375,7 +375,7 @@ def answer_question(
         )
 
 
-def _answer_question_inner(
+def _answer_question_inner(  # decay: ask mode scheduled for removal
     module: str,
     current_content: list[list[str]],
     table_structure: dict[str, Any],
@@ -423,7 +423,7 @@ def _answer_question_inner(
             history_lines.append(f"{role}: {content}")
     history_block = "\n".join(history_lines) if history_lines else "(none)"
 
-    system = (
+    system = (  # decay: ask mode scheduled for removal
         "You are a business strategy copilot in ask-only mode.\n"
         "Your task is to answer the user's question using uploaded documents "
         "and the current slide table snapshot.\n"
@@ -462,5 +462,5 @@ Answer directly in plain text."""
                 )
             return {"assistant_message": assistant_message}
     except Exception as e:
-        logger.exception("Ask-mode answer failed: %s", e)
+        logger.exception("Ask-mode answer failed: %s", e)  # decay: ask mode scheduled for removal
         raise

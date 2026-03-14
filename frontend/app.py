@@ -651,10 +651,12 @@ def render_chat_panel(slide_meta: dict, module: str):
             border-radius: 10px;
             margin-bottom: 0.4rem;
             word-break: break-word;
+            width: fit-content;
         }
         .ai-msg.user {
             background: #eaf4ff;
             border: 1px solid #d3e7ff;
+            margin-left: auto;
         }
         .ai-msg.assistant {
             background: #e8e0f5;
@@ -664,8 +666,8 @@ def render_chat_panel(slide_meta: dict, module: str):
         .ai-msg-wrap.user { justify-content: flex-end; }
         .ai-msg-wrap.assistant { justify-content: flex-start; }
         .ai-msg-icon { flex-shrink: 0; font-size: 1.1rem; margin-top: 0.15rem; }
-        .ai-msg-wrap.user .ai-msg-icon { color: #1a73e8; order: 1; }
-        .ai-msg-wrap.user .ai-msg { order: 2; }
+        .ai-msg-wrap.user .ai-msg-icon { color: #1a73e8; order: 2; }
+        .ai-msg-wrap.user .ai-msg-body { order: 1; }
         .ai-msg-wrap.assistant .ai-msg-icon { color: #6b4c9a; }
         .ai-msg-wrap.assistant .ai-msg { order: 2; }
         .ai-msg-thinking { margin-bottom: 0.35rem; }
@@ -693,8 +695,8 @@ def render_chat_panel(slide_meta: dict, module: str):
         .ai-msg-thinking-stream::after {
             content: "▋"; animation: think-blink 1s step-end infinite; color: #9a8ab8; font-weight: normal;
         }
-        @keyframes think-blink { 50% { opacity: 0; } }
-        .ai-msg-body { flex: 1; min-width: 0; }
+        @keyframes think-blink { 70% { opacity: 0; } }
+        .ai-msg-body { min-width: 0; max-width: 70%; }
         /* Markdown-rendered content inside assistant bubbles */
         .ai-msg.assistant p { margin: 0.25em 0; }
         .ai-msg.assistant p:first-child { margin-top: 0; }
@@ -718,7 +720,10 @@ def render_chat_panel(slide_meta: dict, module: str):
 
     # ── Single unified chat box ─────────────────────────────────────────────
     mode_key = f"chat_mode_{slide_idx}"
-    current_mode = st.session_state.get(mode_key, "modify")
+    default_mode = "cowork" if module in ("Customer Segmentation", "SWOT Analysis") else "modify"
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = default_mode
+    current_mode = st.session_state.get(mode_key, default_mode)
     with st.container(border=True):
         # Scrollable message history (larger chat area)
         with st.container(height=440, border=False):
@@ -784,14 +789,12 @@ def render_chat_panel(slide_meta: dict, module: str):
         input_nonce_by_slide = st.session_state.setdefault("chat_input_nonce_by_slide", {})
         input_nonce = input_nonce_by_slide.get(slide_idx, 0)
         input_key = f"chat_input_{slide_idx}_{input_nonce}"
-        if mode_key not in st.session_state:
-            st.session_state[mode_key] = "modify"
         mode_col, input_col, voice_col = st.columns([1, 3.6, 0.8], gap="small")
         with mode_col:
             if module == "Customer Segmentation" or module == "SWOT Analysis":
-                mode_options = {"modify": "🛠", "ask": "❓", "cowork": "🤝"}
+                mode_options = {"cowork": "🤝 co-work", "modify": "🛠 modify"}
             else:
-                mode_options = {"modify": "🛠", "ask": "❓"}
+                mode_options = {"modify": "🛠 modify"}
             chat_mode = st.selectbox(
                 "Mode",
                 options=list(mode_options.keys()),
@@ -809,9 +812,6 @@ def render_chat_panel(slide_meta: dict, module: str):
                     else
                     "Align on SWOT analysis emphasis..."
                     if chat_mode == "cowork" and module == "SWOT Analysis"
-                    else
-                    "Ask question only (no table changes)..."
-                    if chat_mode == "ask"
                     else "Ask AI to refine this slide..."
                 ),
                 label_visibility="collapsed",

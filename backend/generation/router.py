@@ -31,7 +31,7 @@ class ChatRequest(BaseModel):
     current_column_headers: list[str] | None = None
     user_message: str
     conversation_history: list[dict[str, str]] | None = None
-    mode: Literal["ask", "modify"] = "modify"
+    mode: Literal["ask", "modify"] = "modify"  # decay: ask mode scheduled for removal
 
 
 class KeyQuestionsResponse(BaseModel):
@@ -111,7 +111,7 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
     Apply user feedback to update table content via agent.
     """
     try:
-        if req.mode == "ask":
+        if req.mode == "ask":  # decay: ask mode scheduled for removal
             answer = answer_question(
                 module=req.module,
                 current_content=req.current_content,
