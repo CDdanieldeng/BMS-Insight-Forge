@@ -733,6 +733,7 @@ def render_chat_panel(slide_meta: dict, module: str):
                 default_bot_msg = (
                     "You are now in the Customer Segmentation module for BP insight generation. "
                     "Let's chat and co-work on the guideline to do customer segmentation."
+                    "To get started, can you share what the main commercial goal is for this segmentation effort? "
                 )
             elif module == "SWOT Analysis" and current_mode == "cowork":
                 default_bot_msg = (
