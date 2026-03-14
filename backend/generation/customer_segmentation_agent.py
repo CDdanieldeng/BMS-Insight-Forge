@@ -395,27 +395,6 @@ def _mark_segments_missing_in_uploaded_files(
     return _ensure_unique_headers(resolved)
 
 
-def _partition_segments_by_presence_in_content(
-    segments: list[str],
-    content: str,
-) -> tuple[list[str], list[int]]:
-    """Return (segments found in content, indices of segments not found).
-
-    Segments whose name does not appear in the provided materials are excluded
-    from extraction; their columns will be filled with NOT_FOUND_CELL_TEXT.
-    """
-    normalized_content = _normalize_text(content)
-    found_segments: list[str] = []
-    not_found_indices: list[int] = []
-    for i, seg in enumerate(segments):
-        normalized_seg = _normalize_text(seg)
-        if normalized_seg and normalized_seg in normalized_content:
-            found_segments.append(seg)
-        else:
-            not_found_indices.append(i)
-    return found_segments, not_found_indices
-
-
 # ---------------------------------------------------------------------------
 # Trace writer
 # ---------------------------------------------------------------------------
