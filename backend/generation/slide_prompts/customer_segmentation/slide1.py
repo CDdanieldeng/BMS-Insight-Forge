@@ -19,34 +19,30 @@ def build_prompts(
 
 SEGMENTATION METHODOLOGY GUIDANCE
 
-The following methodology was agreed with the business team to guide HCP segment
-identification. You MUST apply this methodology as your primary search lens when
-scanning the uploaded materials:
+The following methodology was agreed with the business team and should be treated
+as the decision framework for segment identification.
 
-- Use the segmentation lens, identification criteria, and segment profile
-  expectations described below to locate evidence for each segment in the files.
-- Each segment column header reflects a segment direction proposed by this
-  methodology — search for evidence in the uploaded materials that matches it.
-- If the uploaded materials contain information that helps place an HCP group
-  under a segment, classify it accordingly.
-- This methodology is NOT itself a source of cell content — every cell value MUST
-  be extracted from or verified against the uploaded materials.
-- If the materials do not contain sufficient evidence to populate a cell for a
-  segment that was proposed by this methodology, use exactly:
-  "proposed segment can not be found in given files"
+You will typically receive this methodology in 3 parts:
+- Business Objective
+- Segmentation Lens
+- Segmentation Guideline
 
-Agreed segmentation methodology:
+How to apply it:
+- Treat Segmentation Lens as the primary segmentation axis.
+- Treat Segmentation Guideline as strict classification rules and inclusion constraints.
+- Use Business Objective only as strategic context; do not use it as direct evidence.
+- Validate each segment against uploaded evidence before filling any cell.
+- The methodology guides where to look and how to classify, but it is NOT evidence itself.
+- Every cell value MUST come from or be verified against uploaded materials.
+
+Agreed segmentation methodology (verbatim):
 {cowork_summary.strip()}
 
 ------------------------------------------------------------
 
 """
 
-    not_found_text = (
-        "proposed segment can not be found in given files"
-        if cowork_summary and cowork_summary.strip()
-        else "Not found in provided materials."
-    )
+    not_found_text = "Not found in provided materials."
 
     system = f"""You are a professional consultant supporting a pharmaceutical company.
 {cowork_block}

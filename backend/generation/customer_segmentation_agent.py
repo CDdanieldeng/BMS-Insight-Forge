@@ -32,6 +32,8 @@ from generation.stage_metrics import record_llm_usage, stage_scope
 logger = setup_logging("cs_agent_generation")
 
 MIN_SEGMENTS = 2
+MISSING_PROPOSED_SEGMENT_HEADER = "proposed segment can not be found in given files"
+NOT_FOUND_CELL_TEXT = "Not found in provided materials."
 
 _CS_AGENT_TRACE_DIR = (
     Path(__file__).resolve().parents[1] / "logs" / "cs_agent_llm"
@@ -264,11 +266,6 @@ GENERAL SEGMENTATION GUIDELINES
 Customers refer only to HCPs (physicians, specialists, prescribers, clinical decision makers). \
 Do NOT create segments for payers, regulators, procurement bodies, government stakeholders, or patients.
 
-Segments must primarily differ by key distinguishing traits, such as:
-- Attitudes / beliefs: mindset toward disease management, treatment innovation, evidence expectations
-- Behaviors: prescribing decisions, therapy choice, sequencing, switching, adoption timing
-- Drivers and barriers: factors influencing treatment decisions
-
 SOURCING RULES (CRITICAL)
 1. Only include segment distinctions explicitly supported by the source material.
 2. Do not logically deduce traits not stated in the documents.
@@ -349,18 +346,53 @@ def _repair_table(data: list, segments: list[str]) -> list[list[str]]:
             if name in set(segments):
                 seg_map[name] = content
             i += 2
-        return [seg_map.get(seg, "Not found in provided materials.") for seg in segments]
+        return [seg_map.get(seg, NOT_FOUND_CELL_TEXT) for seg in segments]
 
     repaired: list[list[str]] = []
     for row in data:
         if not isinstance(row, list):
-            repaired.append(["Not found in provided materials."] * n)
+            repaired.append([NOT_FOUND_CELL_TEXT] * n)
             continue
         if _needs_repair(row):
             repaired.append(_split_row(row))
         else:
             repaired.append([str(c) for c in row])
     return repaired
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _ensure_unique_headers(headers: list[str]) -> list[str]:
+    """Keep table headers unique to avoid downstream column ambiguity."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for header in headers:
+        key = _normalize_text(header)
+        count = seen.get(key, 0) + 1
+        seen[key] = count
+        if count == 1:
+            out.append(header)
+        else:
+            out.append(f"{header} ({count})")
+    return out
+
+
+def _mark_segments_missing_in_uploaded_files(
+    segments: list[str],
+    content: str,
+) -> list[str]:
+    """Replace segment headers when names are not evidenced in uploaded files."""
+    normalized_content = _normalize_text(content)
+    resolved: list[str] = []
+    for seg in segments:
+        normalized_seg = _normalize_text(seg)
+        if normalized_seg and normalized_seg in normalized_content:
+            resolved.append(seg)
+        else:
+            resolved.append(MISSING_PROPOSED_SEGMENT_HEADER)
+    return _ensure_unique_headers(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -714,13 +746,8 @@ class CustomerSegmentationAgent:
                     len(indexes),
                     len(segments),
                 )
-                empty_cell = (
-                    "proposed segment can not be found in given files"
-                    if cowork_summary and cowork_summary.strip()
-                    else "Not found in provided materials."
-                )
                 return [
-                    [empty_cell for _ in segments]
+                    [NOT_FOUND_CELL_TEXT for _ in segments]
                     for _ in indexes
                 ]
 
@@ -882,6 +909,7 @@ class CustomerSegmentationAgent:
             segments = [s for s in segments if s][:n_segments]
             while len(segments) < MIN_SEGMENTS:
                 segments.append(f"Segment {len(segments) + 1}")
+            segments = _mark_segments_missing_in_uploaded_files(segments, synth_content)
 
             logger.info(
                 "CS agent: cowork methodology-guided segments resolved module=%s segments=%s",
