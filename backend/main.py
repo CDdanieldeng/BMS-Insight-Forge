@@ -14,6 +14,7 @@ from generation.router import router as generation_router
 from retriever.router import router as retriever_router
 from cowork_agent.router import router as cowork_agent_router
 from web_search.router import router as web_search_router
+from voice.router import router as voice_router
 
 # Load .env from project root so backend works even when started manually.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -48,6 +49,7 @@ app.include_router(retriever_router)
 app.include_router(fill_engine_router)
 app.include_router(cowork_agent_router)
 app.include_router(web_search_router)
+app.include_router(voice_router)
 
 
 @app.get("/health")

@@ -15,8 +15,9 @@ import requests
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import streamlit as st
 try:
-    from streamlit_mic_recorder import speech_to_text
+    from streamlit_mic_recorder import mic_recorder, speech_to_text
 except Exception:
+    mic_recorder = None
     speech_to_text = None
 
 API_SESSION = requests.Session()
@@ -87,6 +88,7 @@ def init_session_state():
         "chat_history_by_slide": {},
         "chat_input_nonce_by_slide": {},
         "last_voice_transcript_by_slide": {},
+        "last_voice_id_by_slide": {},
         "cowork_session_id_by_slide": {},
         "cowork_ready_by_slide": {},
         "cowork_draft_by_slide": {},
@@ -97,6 +99,9 @@ def init_session_state():
         "cowork_segment_names_by_slide": {},
         # Trigger completion celebration only once per completion transition.
         "completion_celebrated": False,
+        # Web search state: per-slide search results and last query
+        "web_search_results_by_slide": {},
+        "web_search_query_by_slide": {},
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -517,6 +522,101 @@ def render_controls_panel(slide_meta: dict, module: str):
                         st.error(f"Fill error: {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Web Search Panel  (below Fill Slide button, per slide)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_web_search_panel(slide_meta: dict):
+    """Internet search bar + collapsible result cards, isolated per slide."""
+    slide_idx = slide_meta["idx"]
+    results_store = st.session_state.setdefault("web_search_results_by_slide", {})
+    query_store = st.session_state.setdefault("web_search_query_by_slide", {})
+
+    st.markdown(
+        """
+        <style>
+        .ws-header {
+            font-size: 0.85rem; font-weight: 600; color: #1B3A5C;
+            letter-spacing: 0.03em; margin: 0.6rem 0 0.3rem;
+        }
+        .ws-result-url {
+            font-size: 0.72rem; color: #1a73e8; word-break: break-all; margin-bottom: 0.4rem;
+        }
+        .ws-result-body {
+            font-size: 0.8rem; line-height: 1.5; color: #333;
+            white-space: pre-wrap; word-break: break-word;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='ws-header'>🌐 Internet Search</div>", unsafe_allow_html=True)
+
+    search_col, btn_col = st.columns([5, 1])
+    with search_col:
+        query_val = st.text_input(
+            "web_search_input",
+            value=query_store.get(slide_idx, ""),
+            placeholder="Search the web for insights…",
+            label_visibility="collapsed",
+            key=f"ws_input_{slide_idx}",
+            autocomplete="off",
+        )
+    with btn_col:
+        do_search = st.button(
+            "Search",
+            use_container_width=True,
+            key=f"ws_btn_{slide_idx}",
+        )
+
+    if do_search:
+        q = query_val.strip()
+        if not q:
+            st.warning("Enter a query before searching.")
+        else:
+            with st.spinner("Searching the web…"):
+                try:
+                    resp = API_SESSION.post(
+                        f"{BACKEND_URL}/web-search/search",
+                        json={"query": q, "max_results": 5},
+                        timeout=20,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    results_store[slide_idx] = data.get("results", [])
+                    query_store[slide_idx] = q
+                except Exception as exc:
+                    st.error(f"Search failed: {exc}")
+
+    results = results_store.get(slide_idx, [])
+    if results:
+        last_q = query_store.get(slide_idx, "")
+        col_cap, col_clr = st.columns([4, 1])
+        with col_cap:
+            st.caption(f"Top results for: *{html.escape(last_q)}*")
+        with col_clr:
+            if st.button("Clear", key=f"ws_clear_{slide_idx}", use_container_width=True):
+                results_store.pop(slide_idx, None)
+                query_store.pop(slide_idx, None)
+                st.rerun()
+
+        for i, r in enumerate(results[:5]):
+            title = r.get("title") or f"Result {i + 1}"
+            url = r.get("url", "")
+            content = r.get("content", "")
+            with st.expander(title, expanded=False):
+                if url:
+                    st.markdown(
+                        f"<div class='ws-result-url'><a href='{url}' target='_blank'>{url}</a></div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(
+                    f"<div class='ws-result-body'>{html.escape(content)}</div>",
+                    unsafe_allow_html=True,
+                )
+
+
 def render_chat_panel(slide_meta: dict, module: str):
     """Full-width unified AI chat dialog rendered below the slide table."""
     slide_idx = slide_meta["idx"]
@@ -715,27 +815,62 @@ def render_chat_panel(slide_meta: dict, module: str):
                     else "Ask AI to refine this slide..."
                 ),
                 label_visibility="collapsed",
+                autocomplete="off",
             )
         with voice_col:
-            if speech_to_text is None:
+            if mic_recorder is None:
                 st.button("🎤", disabled=True, help="Install streamlit-mic-recorder to enable voice input.")
             else:
-                try:
-                    spoken_text = speech_to_text(
-                        language="en",
-                        just_once=True,
-                        key=f"voice_input_{slide_idx}",
-                    )
-                except Exception:
-                    spoken_text = None
-                if isinstance(spoken_text, str):
-                    cleaned_spoken = spoken_text.strip()
-                    if cleaned_spoken:
-                        last_voice = st.session_state.setdefault("last_voice_transcript_by_slide", {})
-                        if last_voice.get(slide_idx) != cleaned_spoken:
-                            st.session_state[input_key] = cleaned_spoken
-                            last_voice[slide_idx] = cleaned_spoken
-                            st.rerun()
+                voice_key = f"voice_input_{slide_idx}"
+                audio_out = st.session_state.get(voice_key + "_output")
+                audio_bytes = audio_out.get("bytes") if isinstance(audio_out, dict) else None
+                audio_id = audio_out.get("id") if isinstance(audio_out, dict) else None
+                last_processed = st.session_state.setdefault("last_voice_id_by_slide", {})
+                if (
+                    audio_bytes
+                    and audio_id
+                    and last_processed.get(slide_idx) != audio_id
+                ):
+                    transcript_placeholder = st.empty()
+                    transcript_placeholder.caption("🎤 Transcribing...")
+                    try:
+                        payload = {
+                            "audio_b64": base64.b64encode(audio_bytes).decode("utf-8"),
+                            "language": "en",
+                        }
+                        with API_SESSION.post(
+                            f"{BACKEND_URL}/voice/transcribe/stream",
+                            json=payload,
+                            stream=True,
+                            timeout=TIMEOUT_LLM_GENERATION,
+                        ) as resp:
+                            resp.raise_for_status()
+                            final_transcript = ""
+                            for line in resp.iter_lines(decode_unicode=True):
+                                if line and line.startswith("data: "):
+                                    try:
+                                        data = json.loads(line[6:])
+                                        t = data.get("transcript", "")
+                                        if t:
+                                            transcript_placeholder.caption(f"🎤 {t}")
+                                            if data.get("type") == "final":
+                                                final_transcript = t
+                                    except json.JSONDecodeError:
+                                        pass
+                        if final_transcript:
+                            st.session_state[input_key] = final_transcript
+                            last_voice = st.session_state.setdefault("last_voice_transcript_by_slide", {})
+                            last_voice[slide_idx] = final_transcript
+                        last_processed[slide_idx] = audio_id
+                    except Exception as e:
+                        transcript_placeholder.caption(f"❌ Voice error: {e}")
+                    st.rerun()
+                mic_recorder(
+                    start_prompt="🎤",
+                    stop_prompt="⏹",
+                    just_once=True,
+                    key=voice_key,
+                )
     # Send, Clear, and (in cowork mode) End conversation in one horizontal row
     if chat_mode == "cowork":
         action_l, action_m, action_r = st.columns(3)
@@ -1116,8 +1251,9 @@ def render_module_tab(module: str, slides: list):
             )
             render_slide_content(slide_meta)
             st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-            # Bottom right: upload + Fill Slide
+            # Bottom right: upload + Fill Slide + web search
             render_controls_panel(slide_meta, module)
+            render_web_search_panel(slide_meta)
 
         # Download when all slides in module are done
         all_filled = all(s["idx"] in st.session_state.filled_slides for s in slides)

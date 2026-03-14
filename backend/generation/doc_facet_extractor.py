@@ -110,6 +110,7 @@ def _extract_document_facet_inner(
                 _CLASSIFY_SYSTEM,
                 _CLASSIFY_USER.format(content=classify_sample),
                 max_tokens=350,
+                model_override="qwen-turbo",
             ).strip()
 
             cleaned = raw_classify
