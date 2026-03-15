@@ -6,7 +6,9 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from generation.agent import apply_feedback, answer_question
+from generation.agent import answer_question
+from modules._common import get_shared_fix_table_agent
+from modules._registry import get_module
 from generation.key_questions import get_questions_for_module
 from generation.orchestrator import run_fill, generate_key_question_answers
 
@@ -123,7 +125,13 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
             )
             return {"mode": "ask", **answer}
 
-        updated = apply_feedback(
+        provider = get_module(req.module)
+        fix_agent = (
+            provider.get_fix_table_agent()
+            if provider
+            else get_shared_fix_table_agent()
+        )
+        updated = fix_agent.apply_feedback(
             module=req.module,
             current_content=req.current_content,
             table_structure=req.table_structure,

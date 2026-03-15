@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from cowork_agent.models import ChatMessage
 from cowork_agent.swot_prompt_builder import build_swot_prompts, build_swot_summary_prompt
-from generation.llm_client import complete
+from shared.llm_client import complete
 
 
 def generate_swot_turn(

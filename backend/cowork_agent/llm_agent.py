@@ -8,7 +8,7 @@ from typing import Any
 
 from cowork_agent.prompt_builder import build_prompts, build_summary_prompt
 from cowork_agent.models import CoworkSessionState
-from generation.llm_client import complete
+from shared.llm_client import complete
 
 
 def _extract_json(raw: str) -> dict[str, Any]:

@@ -1,8 +1,10 @@
-"""API router for CS cowork conversational agent."""
+"""API router for cowork conversational agents. Dispatches via module registry."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from modules._registry import get_module
 
 from cowork_agent.models import (
     CoworkTurnRequest,
@@ -11,26 +13,43 @@ from cowork_agent.models import (
     DirectUploadedDoc,
     WorkflowState,
 )
-from cowork_agent.orchestrator import CSCoworkOrchestrator
-from cowork_agent.swot_orchestrator import SwotCoworkOrchestrator
 from retriever.converter import convert_to_markdown
 
 router = APIRouter(prefix="/cowork-agent", tags=["cowork-agent"])
 logger = __import__("logging").getLogger("cowork_agent")
 
-_orchestrator = CSCoworkOrchestrator()
-_swot_orchestrator = SwotCoworkOrchestrator()
+
+def _normalize_workflow_state(result: dict) -> dict:
+    """Ensure workflow.state is a valid WorkflowState enum for CoworkTurnResponse."""
+    wf = result.get("workflow")
+    if wf and isinstance(wf.get("state"), str):
+        try:
+            wf = dict(wf)
+            wf["state"] = WorkflowState(wf["state"])
+            result = dict(result)
+            result["workflow"] = wf
+        except ValueError:
+            wf = dict(wf)
+            wf["state"] = WorkflowState.REVIEWING_WITH_USER
+            result = dict(result)
+            result["workflow"] = wf
+    return result
 
 
 @router.post("/cs/chat", response_model=CoworkTurnResponse)
 async def cs_cowork_chat(req: CoworkTurnRequest) -> CoworkTurnResponse:
-    if req.module.strip().lower() != "customer segmentation":
+    provider = get_module(req.module)
+    if not provider or not provider.get_cowork_agent():
         raise HTTPException(
             status_code=400,
-            detail="Cowork mode is currently available for Customer Segmentation only.",
+            detail="Cowork mode is not available for this module.",
         )
     try:
-        return _orchestrator.handle_turn(req)
+        result = provider.get_cowork_agent().handle_turn(req)
+        if isinstance(result, dict):
+            result = _normalize_workflow_state(result)
+            return CoworkTurnResponse(**result)
+        return result
     except Exception as e:
         logger.exception("Cowork chat failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -42,10 +61,11 @@ async def cs_cowork_upload_files(
     module: str = Form(...),
     files: list[UploadFile] = File(...),
 ) -> CoworkUploadResponse:
-    if module.strip().lower() != "customer segmentation":
+    provider = get_module(module)
+    if not provider or not provider.get_cowork_agent():
         raise HTTPException(
             status_code=400,
-            detail="Cowork mode is currently available for Customer Segmentation only.",
+            detail="Cowork upload is not available for this module.",
         )
     converted_docs: list[DirectUploadedDoc] = []
     for f in files:
@@ -65,7 +85,7 @@ async def cs_cowork_upload_files(
             status_code=400,
             detail="No valid files were converted. Supported: .pptx/.docx/.doc/.pdf/.md",
         )
-    session = _orchestrator.store_direct_upload_docs(
+    session = provider.get_cowork_agent().store_direct_upload_docs(
         session_id=session_id,
         module=module,
         docs=converted_docs,
@@ -83,20 +103,15 @@ async def cs_cowork_upload_files(
 
 @router.post("/swot/chat", response_model=CoworkTurnResponse)
 async def swot_cowork_chat(req: CoworkTurnRequest) -> CoworkTurnResponse:
-    if req.module.strip().lower() != "swot analysis":
+    provider = get_module(req.module)
+    if not provider or not provider.get_cowork_agent():
         raise HTTPException(
             status_code=400,
-            detail="SWOT chat is for SWOT Analysis module only.",
+            detail="SWOT chat is not available for this module.",
         )
     try:
-        result = _swot_orchestrator.handle_turn(req)
-        # Ensure workflow.state is a valid WorkflowState enum
-        wf = result["workflow"]
-        if isinstance(wf.get("state"), str):
-            try:
-                wf["state"] = WorkflowState(wf["state"])
-            except ValueError:
-                wf["state"] = WorkflowState.REVIEWING_WITH_USER
+        result = provider.get_cowork_agent().handle_turn(req)
+        result = _normalize_workflow_state(result)
         return CoworkTurnResponse(**result)
     except Exception as e:
         logger.exception("SWOT cowork chat failed: %s", e)
@@ -109,10 +124,11 @@ async def swot_cowork_upload_files(
     module: str = Form(...),
     files: list[UploadFile] = File(...),
 ) -> CoworkUploadResponse:
-    if module.strip().lower() != "swot analysis":
+    provider = get_module(module)
+    if not provider or not provider.get_cowork_agent():
         raise HTTPException(
             status_code=400,
-            detail="SWOT upload is for SWOT Analysis module only.",
+            detail="SWOT upload is not available for this module.",
         )
     converted_docs: list[DirectUploadedDoc] = []
     for f in files:
@@ -132,7 +148,7 @@ async def swot_cowork_upload_files(
             status_code=400,
             detail="No valid files were converted. Supported: .pptx/.docx/.doc/.pdf/.md",
         )
-    session = _swot_orchestrator.store_direct_upload_docs(
+    session = provider.get_cowork_agent().store_direct_upload_docs(
         session_id=session_id,
         module=module,
         docs=converted_docs,
@@ -143,4 +159,3 @@ async def swot_cowork_upload_files(
         total_docs_in_memory=len(session.direct_uploaded_docs),
         filenames=[d.filename for d in converted_docs],
     )
-

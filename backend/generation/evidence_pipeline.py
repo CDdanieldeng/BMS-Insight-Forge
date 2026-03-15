@@ -13,8 +13,8 @@ from shared.logging_config import setup_logging
 
 from generation.compression import compress_chunk
 from generation.evidence_judge import judge_snippet
-from generation.facet_cache import FacetCache
-from generation.facet_extractor import extract_facets_batch
+from retriever.facet_cache import FacetCache
+from retriever.facet_extractor import extract_facets_batch
 from generation.pipeline_config import PipelineConfig
 from generation.stage_metrics import stage_scope
 from retriever.chunker import bm25_retrieve_records

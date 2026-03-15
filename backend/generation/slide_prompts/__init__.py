@@ -16,12 +16,4 @@ from .config import (
     get_prompt_builder,
 )
 
-# Import submodules so they register their builders
-from . import customer_segmentation  # noqa: F401
-from . import messaging_strategy  # noqa: F401
-
-# Call _register on each so REGISTRY is populated
-customer_segmentation._register()  # noqa: F401
-messaging_strategy._register()  # noqa: F401
-
 __all__ = ["PromptBuilder", "get_prompt_builder"]

@@ -13,7 +13,6 @@ from cowork_agent.interfaces import (
     WebSearchServicePlaceholder,
 )
 from cowork_agent.models import TemplateMetadata, UploadedFileMeta
-from generation.orchestrator import _get_context_content, run_fill
 from generation.query_enhancer import enhance_query
 
 
@@ -42,6 +41,8 @@ class ExistingRetrievalService(RetrievalService):
         table_structure: dict[str, Any],
         user_message: str,
     ) -> str:
+        from generation.orchestrator import _get_context_content
+
         query = f"{enhance_query(module, table_structure)}; user ask: {user_message}".strip("; ")
         return _get_context_content(
             file_ids=file_ids,
@@ -59,6 +60,8 @@ class ExistingDraftingService(DraftingService):
         file_ids: list[str],
         table_structure: dict[str, Any],
     ) -> tuple[list[list[str]], list[str]]:
+        from generation.orchestrator import run_fill
+
         result = run_fill(
             slide_idx=slide_idx,
             module=module,

@@ -26,8 +26,8 @@ def _schedule_doc_facet(file_id: str, md_text: str, filename: str) -> None:
     """Submit doc-level facet extraction to a background thread pool."""
     def _run() -> None:
         try:
-            from generation.doc_facet_extractor import extract_document_facet
-            from generation.doc_facet_cache import get_doc_facet_cache
+            from retriever.doc_facet_extractor import extract_document_facet
+            from retriever.doc_facet_cache import get_doc_facet_cache
             facet = extract_document_facet(file_id, md_text, filename)
             get_doc_facet_cache().set(file_id, facet)
             logger.info(

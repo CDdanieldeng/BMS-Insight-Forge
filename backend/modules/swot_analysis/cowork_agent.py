@@ -1,4 +1,4 @@
-"""Simple orchestrator for SWOT cowork mode — conversational alignment only."""
+"""SWOT Analysis cowork agent (starter consultant)."""
 
 from __future__ import annotations
 
@@ -39,8 +39,8 @@ def _direct_docs_context(docs: list[DirectUploadedDoc], max_chars: int = 8000) -
     return "\n\n---\n\n".join(blocks)
 
 
-class SwotCoworkOrchestrator:
-    """Lightweight orchestrator for SWOT cowork — no drafting, no workflow states."""
+class SwotAnalysisCoworkAgent:
+    """Starter consultant for SWOT Analysis — conversational alignment only."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, SwotCoworkSessionState] = {}

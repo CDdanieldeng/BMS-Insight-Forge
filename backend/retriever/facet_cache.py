@@ -8,7 +8,7 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-logger = setup_logging("generation")
+logger = setup_logging("retriever")
 _CACHE_PATH = Path(__file__).resolve().parents[1] / "logs" / "facet_cache.jsonl"
 
 

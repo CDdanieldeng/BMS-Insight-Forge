@@ -7,13 +7,14 @@ import re
 from shared.logging_config import setup_logging
 from typing import Any
 
-from generation.llm_client import complete
+from shared.llm_client import complete
 from retriever.models import ChunkRecord
 
 _CHANNEL_TERMS = ["wechat", "weixin", "journal", "publication", "conference", "congress", "rep"]
 _TOPIC_TERMS = ["preferences", "environment", "channels", "demographics", "volume"]
 
-logger = setup_logging("chunk_facet_extractor")
+logger = setup_logging("retriever")
+
 
 def _rule_facet(chunk: ChunkRecord) -> dict[str, Any]:
     text = (chunk.text or "").lower()

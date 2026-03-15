@@ -1,6 +1,7 @@
 """Customer Segmentation slide prompts: routes by slide-unique row labels."""
 
-from ..config import REGISTRY, normalize_label
+from generation.slide_prompts.config import REGISTRY, normalize_label
+
 from . import slide1, slide2
 from .config import SLIDE2_INDEXES
 
@@ -19,3 +20,6 @@ def _customer_segmentation_prompts(
 
 def _register() -> None:
     REGISTRY["customer segmentation"] = _customer_segmentation_prompts
+
+
+_register()

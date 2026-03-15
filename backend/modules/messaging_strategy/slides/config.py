@@ -1,6 +1,6 @@
 """Shared config for Messaging Strategy slide prompts."""
 
-# Normalized row labels that identify the messaging strategy table (slide 1 / slide 3)
+# Normalized row labels that identify the messaging strategy table (slide 3)
 SLIDE1_INDEXES = [
     "target/prioritized segment",
     "drivers/barriers",

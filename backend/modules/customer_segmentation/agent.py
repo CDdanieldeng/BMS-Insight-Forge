@@ -8,7 +8,7 @@ coordinated pass:
   Step 2 – extract_segments (mature) or synthesize_segments (raw/semi_raw):
              produce 2–n_segments mutually exclusive HCP segment names.
   Step 3 – generate_table: populate slide 1 table cells using the same
-             row-level extraction rules as slide_prompts/customer_segmentation/slide1.py.
+             row-level extraction rules as modules/customer_segmentation/slides/slide1.py.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ MISSING_PROPOSED_SEGMENT_HEADER = "proposed segment can not be found in given fi
 NOT_FOUND_CELL_TEXT = "Not found in provided materials."
 
 _CS_AGENT_TRACE_DIR = (
-    Path(__file__).resolve().parents[1] / "logs" / "cs_agent_llm"
+    Path(__file__).resolve().parents[2] / "logs" / "cs_agent_llm"
 )
 
 # ---------------------------------------------------------------------------
@@ -723,7 +723,7 @@ class CustomerSegmentationAgent:
         prompt within the model's token limit regardless of how many files
         are uploaded.
         """
-        from generation.slide_prompts.customer_segmentation.slide1 import build_prompts
+        from modules.customer_segmentation.slides.slide1 import build_prompts
 
         with stage_scope("cs_agent_generate_table"):
             # Build a targeted retrieval query from the known segments and row labels.
@@ -939,7 +939,7 @@ class CustomerSegmentationAgent:
         if file_ids:
             with stage_scope("cs_agent_doc_facet_lookup"):
                 try:
-                    from generation.doc_facet_cache import get_doc_facet_cache
+                    from retriever.doc_facet_cache import get_doc_facet_cache
                     cache = get_doc_facet_cache()
                     cached_maturity = cache.get_best_maturity(
                         file_ids, topic_preference="customer segmentation"

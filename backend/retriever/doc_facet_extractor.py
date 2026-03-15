@@ -6,8 +6,8 @@ Called once per file at upload time. Generates a doc facet card containing:
   - summary:        one short sentence summarizing the document
   - filename:       original file name
 
-Uses the same LLM client as the rest of the generation pipeline.
-For very large documents a representative sample is used to keep token cost low.
+Uses the shared LLM client. For very large documents a representative sample
+is used to keep token cost low.
 """
 
 from __future__ import annotations
@@ -18,10 +18,10 @@ import time
 from typing import Any
 
 from shared.logging_config import setup_logging
-from generation.llm_client import complete
+from shared.llm_client import complete
 from generation.stage_metrics import run_scope, stage_scope
 
-logger = setup_logging("generation")
+logger = setup_logging("retriever")
 
 # Sample the first + middle portion of the document for classification.
 # This is enough to detect structure/maturity signals without reading everything.

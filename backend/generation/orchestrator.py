@@ -11,7 +11,7 @@ from typing import Any
 from shared.logging_config import setup_logging
 
 from generation.key_questions import get_questions_for_module
-from generation.llm_client import complete
+from shared.llm_client import complete
 from generation.pipeline_config import load_pipeline_config
 from generation.query_enhancer import enhance_query
 from generation.segment_extractor import extract_segment_names
@@ -748,8 +748,14 @@ def run_fill(
                         segment_names,
                     )
                 else:
-                    from generation.customer_segmentation_agent import CustomerSegmentationAgent
-
+                    from modules._registry import get_module
+                    provider = get_module(module)
+                    agent = provider.get_table_fill_agent() if provider else None
+                    if not agent:
+                        raise RuntimeError(
+                            f"No table fill agent for module {module!r}; "
+                            "CustomerSegmentationProvider should be registered."
+                        )
                     n_segments = len(placeholder_cols)
                     logger.info(
                         "CS agent: placeholder columns detected (%d), launching agent module=%s",
@@ -759,7 +765,6 @@ def run_fill(
                     fill_trace: dict[str, Any] | None = (
                         {} if _should_write_fill_trace(slide_idx, module) else None
                     )
-                    agent = CustomerSegmentationAgent()
                     agent_result = agent.run(
                         file_ids=file_ids,
                         n_segments=n_segments,

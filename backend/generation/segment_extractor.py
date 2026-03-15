@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from shared.logging_config import setup_logging
 
-from generation.llm_client import complete
+from shared.llm_client import complete
 from generation.stage_metrics import stage_scope
 
 logger = setup_logging("generation")
