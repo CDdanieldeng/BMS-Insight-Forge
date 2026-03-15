@@ -13,7 +13,7 @@ services:
       - ./config:/app/config:ro
       - ./example_files:/app/example_files:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80001/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -24,11 +24,11 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "8501:8501"
+      - "8503:8503"
     env_file:
       - .env
     environment:
-      - BACKEND_URL=http://backend:80001
+      - BACKEND_URL=http://backend:8001
     volumes:
       - ./example_files:/app/example_files:ro
     depends_on:
