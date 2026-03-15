@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import os
+import threading
 import time
 
 import websocket
@@ -55,13 +56,16 @@ def transcribe_audio_stream(
 
     final_transcript: list[str] = []
     partial_text: list[str] = []
+    session_ready = threading.Event()
 
     def _on_open(ws):
         session = {
             "modalities": ["text"],
-            "input_audio_format": "pcm",
-            "sample_rate": sample_rate,
-            "input_audio_transcription": {"language": language},
+            "input_audio_transcription": {
+                "language": language,
+                "sample_rate": sample_rate,
+                "input_audio_format": "pcm",
+            },
             "turn_detection": (
                 {
                     "type": "server_vad",
@@ -80,19 +84,21 @@ def transcribe_audio_stream(
         try:
             data = json.loads(message)
             event_type = data.get("type", "")
-            # Partial transcription
-            if "conversation.item.input_audio_transcription" in event_type and "text" in event_type:
-                item = data.get("item", {})
-                transcript = item.get("transcript") or item.get("stash") or ""
+            logger.debug("ASR event: %s", event_type)
+            # Session ready — must wait before sending audio
+            if event_type in ("session.updated", "session.created"):
+                session_ready.set()
+            # Interim/stash transcription — DashScope sends data["stash"]
+            elif event_type == "conversation.item.input_audio_transcription.text":
+                transcript = data.get("stash", "")
                 if transcript:
                     partial_text.clear()
                     partial_text.append(transcript)
                     if on_partial:
                         on_partial(transcript)
-            # Final transcription
-            if "completed" in event_type or "conversation.item.input_audio_transcription.completed" == event_type:
-                item = data.get("item", {})
-                transcript = item.get("transcript", "")
+            # Final transcription — DashScope sends data["transcript"]
+            elif event_type == "conversation.item.input_audio_transcription.completed":
+                transcript = data.get("transcript", "")
                 if transcript:
                     final_transcript.append(transcript)
                     if on_final:
@@ -116,14 +122,13 @@ def transcribe_audio_stream(
     )
 
     # Run WebSocket in a thread and send audio from main thread
-    import threading
-
     thread = threading.Thread(target=lambda: ws.run_forever())
     thread.daemon = True
     thread.start()
 
-    # Wait for session init before sending audio
-    time.sleep(0.5)
+    # Wait for session.updated before sending audio (DashScope requirement)
+    if not session_ready.wait(timeout=10):
+        logger.warning("Did not receive session.updated; proceeding anyway")
 
     # Send audio in chunks (3200 bytes ≈ 100ms at 16kHz 16-bit mono)
     chunk_size = 3200
@@ -146,15 +151,19 @@ def transcribe_audio_stream(
         offset += chunk_size
         time.sleep(0.05)
 
-    if enable_vad:
-        try:
+    # Signal end of session so the server flushes final transcription.
+    # In VAD mode: send session.finish. In manual mode: commit first then finish.
+    try:
+        if not enable_vad:
             ws.send(json.dumps({"event_id": "commit", "type": "input_audio_buffer.commit"}))
-        except Exception:
-            pass
+            time.sleep(0.3)
+        ws.send(json.dumps({"event_id": "finish", "type": "session.finish"}))
+    except Exception:
+        pass
 
-    # Wait for processing
+    # Wait for final transcription (up to ~10 s)
     time.sleep(1.0)
-    for _ in range(30):
+    for _ in range(45):
         if final_transcript or not thread.is_alive():
             break
         time.sleep(0.2)
@@ -167,10 +176,13 @@ def transcribe_audio_stream(
 
 def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
     """
-    Transcribe WAV audio bytes. Converts to PCM 16kHz if needed.
+    Transcribe audio bytes (WAV, WebM/Opus, etc.). Converts to PCM 16kHz if needed.
+
+    Browser MediaRecorder typically outputs WebM/Opus; streamlit-mic-recorder
+    may send WebM rather than WAV. We use from_file() so ffmpeg can auto-detect.
 
     Args:
-        wav_bytes: WAV file bytes (from mic recorder, etc.).
+        wav_bytes: Audio file bytes (WAV, WebM, etc. from mic recorder).
         **kwargs: Passed to transcribe_audio_stream.
 
     Returns:
@@ -179,9 +191,10 @@ def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
     try:
         from pydub import AudioSegment
     except ImportError:
-        raise ImportError("pydub is required for WAV conversion. pip install pydub")
+        raise ImportError("pydub is required for audio conversion. pip install pydub")
 
-    audio = AudioSegment.from_wav(io.BytesIO(wav_bytes))
+    # Auto-detect format (WebM/Opus from browser, WAV, etc.) — do not assume WAV
+    audio = AudioSegment.from_file(io.BytesIO(wav_bytes))
     # Resample to 16kHz, convert to mono
     if audio.frame_rate != 16000 or audio.channels != 1:
         audio = audio.set_frame_rate(16000).set_channels(1)

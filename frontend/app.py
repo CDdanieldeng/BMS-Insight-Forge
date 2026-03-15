@@ -862,9 +862,11 @@ def render_chat_panel(slide_meta: dict, module: str):
                             st.session_state[input_key] = final_transcript
                             last_voice = st.session_state.setdefault("last_voice_transcript_by_slide", {})
                             last_voice[slide_idx] = final_transcript
-                        last_processed[slide_idx] = audio_id
                     except Exception as e:
                         transcript_placeholder.caption(f"❌ Voice error: {e}")
+                    finally:
+                        # Always mark as processed to prevent infinite retry on error
+                        last_processed[slide_idx] = audio_id
                     st.rerun()
                 mic_recorder(
                     start_prompt="🎤",

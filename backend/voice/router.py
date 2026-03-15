@@ -78,6 +78,12 @@ def _transcribe_with_streaming(wav_bytes: bytes, language: str = "en"):
             final_transcript = (final_transcript + " " + payload).strip()
         elif kind == "done":
             final_transcript = payload or final_transcript
+            # Debug: print API result to terminal to verify backend returns transcript
+            if final_transcript:
+                print(f"[VOICE] API returned transcript: {repr(final_transcript)}", flush=True)
+            else:
+                print("[VOICE] API returned EMPTY transcript (ASR produced no text)", flush=True)
+            logger.info("Voice transcribe final: %s", final_transcript[:80] + "..." if len(final_transcript) > 80 else final_transcript)
             yield f"data: {json.dumps({'type': 'final', 'transcript': final_transcript})}\n\n"
             break
 
@@ -109,6 +115,7 @@ def transcribe_stream(req: TranscribeRequest):
     Transcribe WAV audio and stream partial + final results via Server-Sent Events.
     Frontend can consume the stream to show live transcription in the chatbox.
     """
+    print("[voice] transcribe/stream: request received")
     try:
         wav_bytes = base64.b64decode(req.audio_b64)
     except Exception as e:
@@ -117,8 +124,12 @@ def transcribe_stream(req: TranscribeRequest):
     if not wav_bytes:
         raise HTTPException(status_code=400, detail="Empty audio data")
 
+    print(f"[voice] transcribe/stream: audio decoded, {len(wav_bytes)} bytes")
+
     def gen():
         for chunk in _transcribe_with_streaming(wav_bytes, req.language):
+            if "final" in chunk and '"transcript"' in chunk:
+                print(f"[voice] API returning transcript: {chunk.strip()}")
             yield chunk
 
     return StreamingResponse(

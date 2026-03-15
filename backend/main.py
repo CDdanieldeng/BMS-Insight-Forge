@@ -4,6 +4,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# Load .env before any imports that depend on env vars (e.g. voice ASR).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,9 +19,6 @@ from retriever.router import router as retriever_router
 from modules.cowork.router import router as cowork_agent_router
 from web_search.router import router as web_search_router
 from voice.router import router as voice_router
-
-# Load .env from project root so backend works even when started manually.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = setup_logging("main")
 
