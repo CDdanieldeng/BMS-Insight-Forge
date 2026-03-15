@@ -1,4 +1,4 @@
-"""Agent for user feedback: adjust segment names and table content."""
+"""Shared agent for user feedback: adjust segment names and table content."""
 
 import json
 import re
@@ -7,12 +7,12 @@ from typing import Any
 from shared.logging_config import setup_logging
 
 from shared.llm_client import complete
-from generation.orchestrator import _get_context_content
-from generation.query_enhancer import enhance_query
-from generation.slide_prompts import get_prompt_builder
+from generation.context_provider import get_context_content
+from retriever.query_enhancer import enhance_query
+from modules._slide_registry import get_prompt_builder
 from generation.stage_metrics import run_scope, stage_scope
 
-logger = setup_logging("generation")
+logger = setup_logging("modules")
 
 
 def _concise_assistant_message(text: str) -> str:
@@ -163,7 +163,7 @@ def _apply_feedback_inner(
     if need_uploaded_context and file_ids:
         # enhance_query uses stage_scope("query_enhancement") internally
         query = f"{enhance_query(module, table_structure)}; user feedback: {user_message}".strip("; ")
-        context = _get_context_content(
+        context = get_context_content(
             file_ids,
             query=query,
             top_k=60,
@@ -403,7 +403,7 @@ def _answer_question_inner(  # decay: ask mode scheduled for removal
     # enhance_query uses stage_scope("query_enhancement") internally
     query = f"{enhance_query(module, table_structure)}; user question: {user_message}".strip("; ")
     context = (
-        _get_context_content(
+        get_context_content(
             file_ids,
             query=query,
             top_k=60,

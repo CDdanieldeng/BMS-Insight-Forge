@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.evidence_pipeline import run_evidence_pipeline
-from generation.pipeline_config import PipelineConfig
+from retriever.evidence_pipeline import run_evidence_pipeline
+from retriever.pipeline_config import PipelineConfig
 from retriever.models import ChunkRecord
 from retriever.router import _chunk_store
 
@@ -52,7 +52,7 @@ class TestFacetBatching(unittest.TestCase):
                 for c in chunks
             }
 
-        with patch("generation.evidence_pipeline.extract_facets_batch", side_effect=fake_batch):
+        with patch("retriever.evidence_pipeline.extract_facets_batch", side_effect=fake_batch):
             result = run_evidence_pipeline(
                 file_ids=[file_id],
                 module="Customer Segmentation",

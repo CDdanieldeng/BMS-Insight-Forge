@@ -11,18 +11,18 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.compression import compress_chunk
-from generation.evidence_judge import judge_snippet
+from retriever.compression import compress_chunk
+from retriever.evidence_judge import judge_snippet
 from retriever.facet_cache import FacetCache
 from retriever.facet_extractor import extract_facets_batch
-from generation.pipeline_config import PipelineConfig
+from retriever.pipeline_config import PipelineConfig
 from generation.stage_metrics import stage_scope
 from retriever.chunker import bm25_retrieve_records
 from retriever.hybrid import hybrid_retrieve
 from retriever.models import ChunkRecord
 from retriever.router import _chunk_store, _embedding_store
 
-logger = setup_logging("generation")
+logger = setup_logging("retriever")
 _cache = FacetCache()
 
 

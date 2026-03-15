@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from cowork_agent.event_interpreter import interpret_event
-from cowork_agent.models import ChatMessage, DirectUploadedDoc, EventType
-from cowork_agent.swot_llm_agent import generate_swot_summary, generate_swot_turn
-from cowork_agent.swot_models import SwotCoworkSessionState
+from modules.cowork.event_interpreter import interpret_event
+from modules.cowork.models import ChatMessage, DirectUploadedDoc, EventType
+from modules.cowork.swot_llm_agent import generate_swot_summary, generate_swot_turn
+from modules.cowork.swot_models import SwotCoworkSessionState
 
 
 def _table_to_text(table_data: list[list[str]], headers: list[str] | None) -> str:
@@ -68,7 +68,7 @@ class SwotAnalysisCoworkAgent:
 
     def handle_turn(self, req) -> dict:
         """Handle a SWOT cowork chat turn. Returns dict compatible with CoworkTurnResponse."""
-        from cowork_agent.models import CoworkTurnRequest, CoworkTurnResponse, CoworkWorkflowMetadata
+        from modules.cowork.models import CoworkTurnRequest, CoworkTurnResponse, CoworkWorkflowMetadata
 
         session = self._load_or_create(req.session_id, req.module)
 

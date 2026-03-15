@@ -7,7 +7,7 @@ by the LLM consultant persona in prompt_builder / orchestrator.
 
 from __future__ import annotations
 
-from cowork_agent.models import EventType, WorkflowState
+from modules.cowork.models import EventType, WorkflowState
 
 
 def next_state(current: WorkflowState, event: EventType, *, has_draft: bool) -> WorkflowState:

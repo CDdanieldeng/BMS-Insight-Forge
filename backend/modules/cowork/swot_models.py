@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from cowork_agent.models import ChatMessage, DirectUploadedDoc
+from modules.cowork.models import ChatMessage, DirectUploadedDoc
 
 
 class SwotCoworkSessionState(BaseModel):

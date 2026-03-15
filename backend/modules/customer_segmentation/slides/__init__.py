@@ -1,6 +1,6 @@
 """Customer Segmentation slide prompts: routes by slide-unique row labels."""
 
-from generation.slide_prompts.config import REGISTRY, normalize_label
+from modules._slide_registry import REGISTRY, normalize_label
 
 from . import slide1, slide2
 from .config import SLIDE2_INDEXES

@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from generation.agent import answer_question
+from modules._feedback_agent import answer_question
 from modules._common import get_shared_fix_table_agent
 from modules._registry import get_module
 from generation.key_questions import get_questions_for_module

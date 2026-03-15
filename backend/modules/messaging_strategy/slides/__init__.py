@@ -1,6 +1,6 @@
 """Messaging Strategy slide prompts."""
 
-from generation.slide_prompts.config import REGISTRY
+from modules._slide_registry import REGISTRY
 
 from . import slide3
 

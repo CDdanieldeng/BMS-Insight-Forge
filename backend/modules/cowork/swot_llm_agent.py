@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cowork_agent.models import ChatMessage
-from cowork_agent.swot_prompt_builder import build_swot_prompts, build_swot_summary_prompt
+from modules.cowork.models import ChatMessage
+from modules.cowork.swot_prompt_builder import build_swot_prompts, build_swot_summary_prompt
 from shared.llm_client import complete
 
 

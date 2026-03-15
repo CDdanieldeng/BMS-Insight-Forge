@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cowork_agent.models import EventType
+from modules.cowork.models import EventType
 
 
 def interpret_event(
@@ -25,4 +25,3 @@ def interpret_event(
     if msg:
         return EventType.USER_MESSAGE
     return EventType.UNKNOWN
-

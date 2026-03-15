@@ -20,8 +20,7 @@ class SharedFixTableAgent:
         conversation_history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Apply feedback and return updated content + assistant message."""
-        # Lazy import to avoid circular dependency: modules -> generation.agent
-        from generation.agent import apply_feedback as _apply_feedback_impl
+        from modules._feedback_agent import apply_feedback as _apply_feedback_impl
 
         return _apply_feedback_impl(
             module=module,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from cowork_agent.adapters import (
+from modules.cowork.adapters import (
     ExistingDraftingService,
     ExistingFilePreparationService,
     ExistingPPTFillAdapter,
@@ -13,8 +13,8 @@ from cowork_agent.adapters import (
     ExistingTemplateService,
     StubWebSearchService,
 )
-from cowork_agent.event_interpreter import interpret_event
-from cowork_agent.interfaces import (
+from modules.cowork.event_interpreter import interpret_event
+from modules.cowork.interfaces import (
     DraftingService,
     FilePreparationService,
     PPTFillAdapter,
@@ -22,8 +22,8 @@ from cowork_agent.interfaces import (
     TemplateService,
     WebSearchServicePlaceholder,
 )
-from cowork_agent.llm_agent import generate_conversation_summary, generate_conversational_turn
-from cowork_agent.models import (
+from modules.cowork.llm_agent import generate_conversation_summary, generate_conversational_turn
+from modules.cowork.models import (
     ChatMessage,
     ConversationPhase,
     CoworkSessionState,
@@ -35,8 +35,8 @@ from cowork_agent.models import (
     SegmentationBrief,
     WorkflowState,
 )
-from cowork_agent.session_store import InMemorySessionStore, SessionStore
-from cowork_agent.workflow import next_state
+from modules.cowork.session_store import InMemorySessionStore, SessionStore
+from modules.cowork.workflow import next_state
 
 
 class CustomerSegmentationCoworkAgent:

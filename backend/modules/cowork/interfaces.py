@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from cowork_agent.models import TemplateMetadata, UploadedFileMeta
+from modules.cowork.models import TemplateMetadata, UploadedFileMeta
 
 
 class TemplateService(Protocol):
@@ -52,4 +52,3 @@ class PPTFillAdapter(Protocol):
         column_headers: list[str],
     ) -> dict[str, Any]:
         ...
-

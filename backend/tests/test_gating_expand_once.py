@@ -4,8 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.evidence_pipeline import run_evidence_pipeline
-from generation.pipeline_config import PipelineConfig
+from retriever.evidence_pipeline import run_evidence_pipeline
+from retriever.pipeline_config import PipelineConfig
 from retriever.models import ChunkRecord
 from retriever.router import _chunk_store
 

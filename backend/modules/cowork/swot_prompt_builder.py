@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from cowork_agent.models import ChatMessage
+from modules.cowork.models import ChatMessage
 
 
 _SYSTEM_TEMPLATE = """\

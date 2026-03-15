@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.evidence_pipeline import run_evidence_pipeline
-from generation.pipeline_config import PipelineConfig
+from retriever.evidence_pipeline import run_evidence_pipeline
+from retriever.pipeline_config import PipelineConfig
 from retriever.models import ChunkRecord
 from retriever.router import _chunk_store
 
@@ -28,7 +28,7 @@ class TestLLMTimeoutDegrade(unittest.TestCase):
             )
         ]
         cfg = PipelineConfig()
-        with patch("generation.evidence_pipeline.extract_facets_batch", side_effect=TimeoutError("llm timeout")):
+        with patch("retriever.evidence_pipeline.extract_facets_batch", side_effect=TimeoutError("llm timeout")):
             result = run_evidence_pipeline(
                 file_ids=[file_id],
                 module="Customer Segmentation",

@@ -485,8 +485,8 @@ class CustomerSegmentationAgent:
         module: str = "customer segmentation",
     ) -> str:
         """Return relevant context for the given query using the evidence pipeline."""
-        from generation.evidence_pipeline import run_evidence_pipeline
-        from generation.pipeline_config import load_pipeline_config
+        from retriever.evidence_pipeline import run_evidence_pipeline
+        from retriever.pipeline_config import load_pipeline_config
 
         config = load_pipeline_config()
         result = run_evidence_pipeline(

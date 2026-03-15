@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from cowork_agent.models import CoworkSessionState
+from modules.cowork.models import CoworkSessionState
 
 
 class SessionStore(Protocol):
@@ -26,4 +26,3 @@ class InMemorySessionStore:
 
     def upsert(self, state: CoworkSessionState) -> None:
         self._store[state.session_id] = state
-

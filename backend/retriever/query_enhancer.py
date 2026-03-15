@@ -12,7 +12,7 @@ from generation.key_questions import get_questions_for_module
 from shared.llm_client import complete
 from generation.stage_metrics import stage_scope
 
-logger = setup_logging("generation")
+logger = setup_logging("retriever")
 
 _QUERY_TRACE_DIR = (
     Path(__file__).resolve().parents[1] / "logs" / "query_enhance_llm"
