@@ -34,6 +34,17 @@ logger = setup_logging("cs_agent_generation")
 MIN_SEGMENTS = 2
 MISSING_PROPOSED_SEGMENT_HEADER = "proposed segment can not be found in given files"
 NOT_FOUND_CELL_TEXT = "Not found in provided materials."
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+# Prompt-size guard for segment naming steps.
+# If estimated prompt tokens exceed this budget, we switch from full-document
+# context to retrieval snippets to avoid context-window errors.
+_SEGMENT_PROMPT_TOKEN_BUDGET_OPENAI = int(
+    os.getenv("CS_SEGMENT_PROMPT_TOKEN_BUDGET_OPENAI", "50000")
+)
+_SEGMENT_PROMPT_TOKEN_BUDGET_QWEN = int(
+    os.getenv("CS_SEGMENT_PROMPT_TOKEN_BUDGET_QWEN", "18000")
+)
 
 _CS_AGENT_TRACE_DIR = (
     Path(__file__).resolve().parents[2] / "logs" / "cs_agent_llm"
@@ -73,6 +84,21 @@ def _record_langchain_usage(msg: Any, elapsed_ms: int) -> None:
         total_tokens=total_tokens,
         elapsed_ms=elapsed_ms,
     )
+
+
+def _estimate_tokens_for_prompt(text: str) -> int:
+    """
+    Conservative prompt token estimate that handles mixed EN/CN text.
+
+    - CJK characters are treated roughly as 1 token each.
+    - Remaining characters are treated as ~1 token per 3.5 chars.
+    """
+    cleaned = text or ""
+    if not cleaned:
+        return 0
+    cjk_chars = len(_CJK_CHAR_RE.findall(cleaned))
+    non_cjk_chars = max(0, len(cleaned) - cjk_chars)
+    return int(cjk_chars + (non_cjk_chars / 3.5))
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +499,57 @@ class CustomerSegmentationAgent:
             ("human", _SYNTHESIZE_WITH_METHODOLOGY_USER),
         ])
 
+    def _segment_prompt_budget(self) -> int:
+        provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        if provider == "qwen":
+            return _SEGMENT_PROMPT_TOKEN_BUDGET_QWEN
+        return _SEGMENT_PROMPT_TOKEN_BUDGET_OPENAI
+
+    def _would_exceed_segment_prompt_budget(self, system_prompt: str, user_prompt: str) -> bool:
+        estimated = _estimate_tokens_for_prompt(system_prompt) + _estimate_tokens_for_prompt(user_prompt)
+        budget = self._segment_prompt_budget()
+        exceeds = estimated > budget
+        logger.info(
+            "CS agent prompt budget check estimated_tokens=%d budget=%d exceeds=%s",
+            estimated,
+            budget,
+            exceeds,
+        )
+        return exceeds
+
+    def _truncate_content_for_budget(
+        self,
+        *,
+        content: str,
+        system_prompt: str,
+        user_template: str,
+        user_template_args: dict[str, Any],
+    ) -> str:
+        """
+        Last-resort truncation to prevent context-window overflow.
+
+        Keeps prompt shell intact and clips only the document content.
+        """
+        budget = self._segment_prompt_budget()
+        fixed_user = user_template.format(content="", **user_template_args)
+        overhead = _estimate_tokens_for_prompt(system_prompt) + _estimate_tokens_for_prompt(fixed_user)
+        available_for_content = max(1000, budget - overhead)
+        estimated_content_tokens = _estimate_tokens_for_prompt(content)
+        if estimated_content_tokens <= available_for_content:
+            return content
+
+        keep_ratio = available_for_content / max(1, estimated_content_tokens)
+        keep_chars = max(1200, int(len(content) * keep_ratio))
+        clipped = content[:keep_chars].rstrip()
+        logger.warning(
+            "CS agent: truncating content for prompt budget estimated_content_tokens=%d allowed_content_tokens=%d original_chars=%d kept_chars=%d",
+            estimated_content_tokens,
+            available_for_content,
+            len(content),
+            len(clipped),
+        )
+        return clipped + "\n\n[Content truncated to fit context window.]"
+
     # ------------------------------------------------------------------
     # Retrieval helper
     # ------------------------------------------------------------------
@@ -588,7 +665,7 @@ class CustomerSegmentationAgent:
                     module=module,
                     system_prompt=_EXTRACT_SYSTEM.format(n_segments=n_segments, min_segments=MIN_SEGMENTS),
                     user_prompt=_EXTRACT_USER.format(
-                        content=content[:200] + "...",
+                        content=content,
                         n_segments=n_segments,
                         min_segments=MIN_SEGMENTS,
                     ),
@@ -632,7 +709,7 @@ class CustomerSegmentationAgent:
                     module=module,
                     system_prompt=_SYNTHESIZE_SYSTEM.format(n_segments=n_segments, min_segments=MIN_SEGMENTS),
                     user_prompt=_SYNTHESIZE_USER.format(
-                        content=content[:200] + "...",
+                        content=content,
                         n_segments=n_segments,
                         min_segments=MIN_SEGMENTS,
                     ),
@@ -682,12 +759,16 @@ class CustomerSegmentationAgent:
                     module=module,
                     system_prompt=rendered_system,
                     user_prompt=_SYNTHESIZE_WITH_METHODOLOGY_USER.format(
-                        content=content[:200] + "...",
+                        content=content,
                         n_segments=n_segments,
                         min_segments=MIN_SEGMENTS,
                     ),
                     llm_raw_response=raw,
-                    extra={"n_segments": n_segments, "methodology_len": len(methodology)},
+                    extra={
+                        "n_segments": n_segments,
+                        "methodology_len": len(methodology),
+                        "content_len": len(content),  # actual chars passed to LLM (trace shows truncated)
+                    },
                 )
                 names = self._parse_segment_list(raw, n_segments, module)
                 logger.info(
@@ -885,12 +966,52 @@ class CustomerSegmentationAgent:
             facet_cache_hit = True
             maturity = "cowork_guided"
 
-            # Retrieve content for methodology-guided synthesis.
-            synth_content = self._retrieve_context(
-                file_ids,
-                "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
-                module=module,
+            # Use full document content for methodology-guided synthesis so the LLM sees
+            # all segment definitions; retrieval returns only top-k snippets and often
+            # misses key content (e.g. only [evidence:1] from the first page).
+            from generation.context_provider import get_full_markdown_context
+
+            synth_content = get_full_markdown_context(file_ids)
+            if not synth_content or not synth_content.strip():
+                # Fallback to retrieval if full content unavailable (e.g. _store empty).
+                logger.warning(
+                    "CS agent: get_full_markdown_context returned empty, falling back to retrieval file_ids=%s",
+                    file_ids,
+                )
+                synth_content = self._retrieve_context(
+                    file_ids,
+                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
+                    module=module,
+                )
+            rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
+                methodology=methodology.strip(),
+                min_segments=MIN_SEGMENTS,
+                n_segments=n_segments,
             )
+            rendered_user = _SYNTHESIZE_WITH_METHODOLOGY_USER.format(
+                content=synth_content,
+                n_segments=n_segments,
+                min_segments=MIN_SEGMENTS,
+            )
+            if self._would_exceed_segment_prompt_budget(rendered_system, rendered_user):
+                logger.warning(
+                    "CS agent: methodology synthesis prompt too large; switching to retrieval context file_ids=%s",
+                    file_ids,
+                )
+                synth_content = self._retrieve_context(
+                    file_ids,
+                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
+                    module=module,
+                )
+                synth_content = self._truncate_content_for_budget(
+                    content=synth_content,
+                    system_prompt=rendered_system,
+                    user_template=_SYNTHESIZE_WITH_METHODOLOGY_USER,
+                    user_template_args={
+                        "n_segments": n_segments,
+                        "min_segments": MIN_SEGMENTS,
+                    },
+                )
 
             segments = self._synthesize_with_methodology(
                 synth_content, n_segments, module, methodology
@@ -972,18 +1093,88 @@ class CustomerSegmentationAgent:
             maturity = self._classify(classify_content, module)
 
         if maturity == "mature":
-            extract_content = self._retrieve_context(
-                file_ids,
-                "HCP segment names customer segmentation",
-                module=module,
+            from generation.context_provider import get_full_markdown_context
+
+            extract_content = get_full_markdown_context(file_ids)
+            if not extract_content or not extract_content.strip():
+                logger.warning(
+                    "CS agent: get_full_markdown_context returned empty for extract, falling back to retrieval file_ids=%s",
+                    file_ids,
+                )
+                extract_content = self._retrieve_context(
+                    file_ids,
+                    "HCP segment names customer segmentation",
+                    module=module,
+                )
+            rendered_system = _EXTRACT_SYSTEM.format(
+                n_segments=n_segments, min_segments=MIN_SEGMENTS
             )
+            rendered_user = _EXTRACT_USER.format(
+                content=extract_content,
+                n_segments=n_segments,
+                min_segments=MIN_SEGMENTS,
+            )
+            if self._would_exceed_segment_prompt_budget(rendered_system, rendered_user):
+                logger.warning(
+                    "CS agent: extract prompt too large; switching to retrieval context file_ids=%s",
+                    file_ids,
+                )
+                extract_content = self._retrieve_context(
+                    file_ids,
+                    "HCP segment names customer segmentation",
+                    module=module,
+                )
+                extract_content = self._truncate_content_for_budget(
+                    content=extract_content,
+                    system_prompt=rendered_system,
+                    user_template=_EXTRACT_USER,
+                    user_template_args={
+                        "n_segments": n_segments,
+                        "min_segments": MIN_SEGMENTS,
+                    },
+                )
             segments = self._extract_segments(extract_content, n_segments, module)
         else:
-            synth_content = self._retrieve_context(
-                file_ids,
-                "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
-                module=module,
+            from generation.context_provider import get_full_markdown_context
+
+            synth_content = get_full_markdown_context(file_ids)
+            if not synth_content or not synth_content.strip():
+                logger.warning(
+                    "CS agent: get_full_markdown_context returned empty for synthesize, falling back to retrieval file_ids=%s",
+                    file_ids,
+                )
+                synth_content = self._retrieve_context(
+                    file_ids,
+                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
+                    module=module,
+                )
+            rendered_system = _SYNTHESIZE_SYSTEM.format(
+                n_segments=n_segments, min_segments=MIN_SEGMENTS
             )
+            rendered_user = _SYNTHESIZE_USER.format(
+                content=synth_content,
+                n_segments=n_segments,
+                min_segments=MIN_SEGMENTS,
+            )
+            if self._would_exceed_segment_prompt_budget(rendered_system, rendered_user):
+                logger.warning(
+                    "CS agent: synthesize prompt too large; switching to retrieval context file_ids=%s",
+                    file_ids,
+                )
+                synth_content = self._retrieve_context(
+                    file_ids,
+                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns",
+                    module=module,
+                )
+                synth_content = self._truncate_content_for_budget(
+                    content=synth_content,
+                    system_prompt=rendered_system,
+                    user_template=_SYNTHESIZE_USER,
+                    user_template_args={
+                        "n_segments": n_segments,
+                        "min_segments": MIN_SEGMENTS,
+                    },
+                )
             segments = self._synthesize_segments(synth_content, n_segments, module)
 
         # Enforce constraints: 2 ≤ count ≤ n_segments

@@ -1,6 +1,7 @@
 """Table content generation: LLM-based cell filling from retriever content."""
 
 import json
+import os
 import re
 import time
 from typing import Any
@@ -146,7 +147,9 @@ def generate_table_content(
 
         try:
             start = time.perf_counter()
-            raw_response = complete(system, user, max_tokens=_max_out)
+            provider = os.getenv("LLM_PROVIDER", "openai").lower()
+            model_override = "qwen-plus" if provider == "qwen" else None
+            raw_response = complete(system, user, max_tokens=_max_out, model_override=model_override)
             if trace_capture is not None:
                 trace_capture["llm_raw_response"] = raw_response
 

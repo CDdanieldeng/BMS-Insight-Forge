@@ -73,15 +73,17 @@ def _retriever_search(
 
 def _full_markdown_context(file_ids: list[str]) -> str:
     """Return full cleaned markdown for all file_ids in original upload order."""
-    from retriever.router import _store
+    from retriever.router import _doc_meta_store, _store
 
     start = time.perf_counter()
     texts: list[str] = []
     found = 0
-    for fid in file_ids:
+    for idx, fid in enumerate(file_ids, start=1):
         text = _store.get(fid)
         if text:
-            texts.append(text.strip())
+            meta = _doc_meta_store.get(fid, {})
+            filename = str(meta.get("filename") or fid)
+            texts.append(f"## Document {idx}: {filename}\n\n{text.strip()}")
             found += 1
 
     combined = "\n\n---\n\n".join(t for t in texts if t)
