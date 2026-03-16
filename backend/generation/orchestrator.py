@@ -15,7 +15,6 @@ from generation.context_provider import (
     get_full_markdown_context,
     use_retriever,
 )
-from generation.key_questions import get_questions_for_module
 from generation.module_handlers import (
     is_messaging_strategy_slide3,
     merge_context_for_slide,
@@ -57,7 +56,7 @@ def generate_key_question_answers(module: str, file_ids: list[str]) -> list[dict
         metadata={"file_ids_count": len(file_ids)},
     ):
         with stage_scope("key_question_prepare"):
-            questions = get_questions_for_module(module)
+            questions: list[str] = []
             if not questions:
                 logger.info("Key answers skipped module=%s reason=no_questions", module)
                 return []

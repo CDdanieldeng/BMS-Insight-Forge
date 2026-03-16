@@ -8,7 +8,6 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.key_questions import get_questions_for_module
 from shared.llm_client import complete
 from generation.stage_metrics import stage_scope
 
@@ -123,7 +122,7 @@ Output ONLY one concise English search query, no explanation."""
     system = """You are a search query enhancer. Given the business key questions and table structure.
 Output a single, concise search query (in English) that would help retrieve relevant content to answer these questions and fill the table.
 Output ONLY the search query, no explanation."""
-    questions = get_questions_for_module(module)
+    questions: list[str] = []
     user = f"""Key business questions:
 {chr(10).join(f'- {q}' for q in questions)}
 
@@ -146,7 +145,7 @@ def enhance_query(module: str, table_structure: dict[str, Any]) -> str:
     with stage_scope("query_enhancement"):
         columns = table_structure.get("columns", [])
         indexes = table_structure.get("indexes", [])
-        questions = get_questions_for_module(module)
+        questions: list[str] = []
         normalized_module = _normalize_label(module)
         mode, system, user = _module_table_structure_prompt(module, columns, indexes)
 

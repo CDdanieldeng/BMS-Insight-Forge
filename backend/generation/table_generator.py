@@ -7,7 +7,6 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.key_questions import get_questions_for_module
 from generation.stage_metrics import stage_scope
 from modules._slide_registry import get_prompt_builder
 from shared.llm_client import complete
@@ -81,7 +80,7 @@ def generate_table_content(
         elif is_swot:
             # ── SWOT: 4 columns, 1 data row — different from CS segment tables ─────
             # Content comes from Customer Segmentation (if in context) + uploaded files
-            questions = get_questions_for_module(module)
+            questions: list[str] = []
             context_for_prompt = retriever_content
             retriever_chars_in_prompt = len(context_for_prompt)
             col_guide = ", ".join(c for c in data_columns if c)
@@ -103,7 +102,7 @@ def generate_table_content(
             )
         else:
             # ── Generic fallback prompt ───────────────────────────────────────────
-            questions = get_questions_for_module(module)
+            questions: list[str] = []
             context_for_prompt = retriever_content
             retriever_chars_in_prompt = len(context_for_prompt)
             system = (

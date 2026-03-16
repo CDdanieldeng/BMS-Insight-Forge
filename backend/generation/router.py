@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from modules._feedback_agent import answer_question
 from modules._common import get_shared_fix_table_agent
 from modules._registry import get_module
-from generation.key_questions import get_questions_for_module
 from generation.orchestrator import run_fill, generate_key_question_answers
 
 router = APIRouter(prefix="/generation", tags=["generation"])
@@ -60,7 +59,7 @@ class KeyAnswersResponse(BaseModel):
 async def key_questions(module: str) -> KeyQuestionsResponse:
     """Return key business questions for a module."""
     try:
-        questions = get_questions_for_module(module)
+        questions: list[str] = []
         return KeyQuestionsResponse(module=module, questions=questions)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

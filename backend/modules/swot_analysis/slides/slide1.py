@@ -1,8 +1,5 @@
 """SWOT Analysis slide 1 (4-column SWOT table) prompt builder."""
 
-from generation.key_questions import get_questions_for_module
-
-
 def build_prompts(
     content: str,
     indexes: list[str],
@@ -10,7 +7,7 @@ def build_prompts(
 ) -> tuple[str, str]:
     """Focused prompt for SWOT Analysis 4-column table."""
     module = "SWOT Analysis"
-    questions = get_questions_for_module(module)
+    questions: list[str] = []
     col_guide = ", ".join(c for c in segment_names if c)
     system = (
         "You are a business analyst. Fill the SWOT table based on the provided context.\n"
