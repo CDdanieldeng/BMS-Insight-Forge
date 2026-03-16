@@ -110,6 +110,412 @@ def init_session_state():
             st.session_state[key] = val
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Processing lock (block UI when long-running operations in progress)
+# ─────────────────────────────────────────────────────────────────────────────
+
+PROCESSING_OVERLAY_HTML = """
+<div id="if-processing-overlay" style="
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 99999; background: rgba(255,255,255,0.75);
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto; cursor: not-allowed;
+">
+    <div style="text-align: center;">
+        <div style="font-size: 1.2rem; font-weight: 600; color: #1a1a2e; margin-bottom: 0.5rem;">
+            Processing…
+        </div>
+        <div style="font-size: 0.9rem; color: #666;">Please wait, do not click.</div>
+    </div>
+</div>
+"""
+
+
+def _is_processing() -> bool:
+    """True when a long-running operation is pending (blocks button responses)."""
+    return bool(st.session_state.get("pending_action"))
+
+
+def _set_pending_and_rerun(action: dict):
+    """Queue a long-running action and rerun to show overlay + execute."""
+    st.session_state["pending_action"] = action
+    st.rerun()
+
+
+def _execute_pending_action():
+    """Run the queued action (called when pending_action is set)."""
+    action = st.session_state.get("pending_action")
+    if not action:
+        return
+    action_type = action.get("type")
+    module = action.get("module")
+    slide_idx = action.get("slide_idx")
+
+    with st.spinner(action.get("message", "Processing…")):
+        try:
+            if action_type == "ingest":
+                files_data = st.session_state.pop("pending_ingest_files", [])
+                if files_data:
+                    from io import BytesIO
+
+                    class _FileLike:
+                        def __init__(self, name: str, data: bytes):
+                            self.name = name
+                            self._data = data
+
+                        def getvalue(self):
+                            return self._data
+
+                    fake_files = [_FileLike(n, b) for n, b in files_data]
+                    ok = _ingest_only(module, fake_files)
+                    if ok:
+                        st.caption(
+                            f"Updated files: {len(st.session_state.file_ids_by_module[module])}"
+                        )
+                _rerun_in_module(module)
+
+            elif action_type == "fill_slide":
+                slide_info = st.session_state.get("slide_info", [])
+                slides_by_module = get_slides_by_module(slide_info)
+                module_slides = slides_by_module.get(module, [])
+                slide_meta = next((s for s in module_slides if s["idx"] == slide_idx), None)
+                module_fids = _module_file_ids(module)
+                if slide_meta and module_fids and st.session_state.pptx_bytes:
+                    table_structure = slide_meta.get("table_structure")
+                    if not table_structure:
+                        r = API_SESSION.post(
+                            f"{BACKEND_URL}/fill-engine/table-structure",
+                            data={"slide_idx": slide_idx, "path": TEMPLATE_PATH},
+                            timeout=TIMEOUT_QUICK,
+                        )
+                        r.raise_for_status()
+                        table_structure = r.json()
+                    cowork_summary = st.session_state.setdefault("cowork_summary_by_slide", {}).get(
+                        slide_idx
+                    )
+                    cowork_segments = st.session_state.setdefault(
+                        "cowork_segment_names_by_slide", {}
+                    ).get(slide_idx)
+                    cowork_guidance = (
+                        {"summary": cowork_summary, "segment_names": cowork_segments or []}
+                        if cowork_summary
+                        else None
+                    )
+                    fill_payload = {
+                        "slide_idx": slide_idx,
+                        "module": module,
+                        "file_ids": module_fids,
+                        "table_structure": table_structure,
+                    }
+                    if cowork_guidance:
+                        fill_payload["cowork_guidance"] = cowork_guidance
+                    fill_resp = API_SESSION.post(
+                        f"{BACKEND_URL}/generation/fill",
+                        json=fill_payload,
+                        timeout=TIMEOUT_LLM_GENERATION,
+                    )
+                    fill_resp.raise_for_status()
+                    fill_result = fill_resp.json()
+                    table_data = fill_result.get("table_data", [])
+                    column_headers = fill_result.get("column_headers")
+                    if table_data:
+                        form_data = {
+                            "slide_idx": slide_idx,
+                            "module": module,
+                            "table_data_b64": base64.b64encode(
+                                json.dumps(table_data).encode()
+                            ).decode(),
+                        }
+                        if column_headers:
+                            form_data["column_headers_b64"] = base64.b64encode(
+                                json.dumps(column_headers).encode()
+                            ).decode()
+                        fill_r = API_SESSION.post(
+                            f"{BACKEND_URL}/fill-engine/fill-table",
+                            data=form_data,
+                            files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                            timeout=TIMEOUT_FILL_TABLE,
+                        )
+                        fill_r.raise_for_status()
+                        st.session_state.pptx_bytes = base64.b64decode(
+                            fill_r.json()["pptx_base64"]
+                        )
+                        st.session_state.filled_slides.add(slide_idx)
+                        st.session_state.table_data_by_slide[slide_idx] = table_data
+                        if column_headers:
+                            st.session_state.setdefault("column_headers_by_slide", {})[
+                                slide_idx
+                            ] = column_headers
+                        st.success("Slide filled!")
+                    _rerun_in_module(module)
+
+            elif action_type == "web_search":
+                q = action.get("query", "").strip()
+                if q:
+                    resp = API_SESSION.post(
+                        f"{BACKEND_URL}/web-search/search",
+                        json={"query": q, "max_results": 5},
+                        timeout=20,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    st.session_state.setdefault("web_search_results_by_slide", {})[
+                        slide_idx
+                    ] = data.get("results", [])
+                    st.session_state.setdefault("web_search_query_by_slide", {})[
+                        slide_idx
+                    ] = q
+                _rerun_in_module(module)
+
+            else:
+                _run_chat_or_cowork_action(action)
+        except Exception as e:
+            st.error(str(e))
+        finally:
+            st.session_state.pop("pending_action", None)
+            st.rerun()
+
+
+def _run_chat_or_cowork_action(action: dict):
+    """Execute chat/cowork/end_conversation/cowork_fill actions."""
+    action_type = action.get("type")
+    module = action.get("module")
+    slide_idx = action.get("slide_idx")
+    slide_info = st.session_state.get("slide_info", [])
+    slides_by_module = get_slides_by_module(slide_info)
+    module_slides = slides_by_module.get(module, [])
+    slide_meta = next((s for s in module_slides if s["idx"] == slide_idx), None)
+    if not slide_meta:
+        return
+    module_fids = _module_file_ids(module)
+    table_structure = slide_meta.get("table_structure") or {}
+    chat_history = list(_get_slide_chat_history(slide_idx))
+
+    if action_type == "end_conversation":
+        sess_map = st.session_state.setdefault("cowork_session_id_by_slide", {})
+        if slide_idx not in sess_map:
+            sess_map[slide_idx] = str(uuid.uuid4())
+        chat_endpoint = (
+            f"{BACKEND_URL}/cowork-agent/swot/chat"
+            if module == "SWOT Analysis"
+            else f"{BACKEND_URL}/cowork-agent/cs/chat"
+        )
+        end_payload = {
+            "session_id": sess_map[slide_idx],
+            "module": module,
+            "slide_idx": slide_idx,
+            "file_ids": module_fids,
+            "table_structure": table_structure,
+            "user_message": "",
+            "conversation_history": chat_history,
+            "allow_web_search": False,
+            "action": "end_conversation",
+        }
+        if module == "SWOT Analysis":
+            cs_summary, cs_table, cs_headers = _get_cs_context_for_swot()
+            if cs_summary:
+                end_payload["cs_cowork_summary"] = cs_summary
+            if cs_table:
+                end_payload["cs_filled_table"] = cs_table
+            if cs_headers:
+                end_payload["cs_filled_headers"] = cs_headers
+        r = API_SESSION.post(chat_endpoint, json=end_payload, timeout=TIMEOUT_LLM_GENERATION)
+        r.raise_for_status()
+        payload = r.json()
+        summary = payload.get("assistant_message", "Summary not available.")
+        _append_slide_chat_message(slide_idx, "assistant", summary)
+        st.session_state.setdefault("cowork_summary_by_slide", {})[slide_idx] = summary
+        seg_names = payload.get("draft_column_headers") or []
+        st.session_state.setdefault("cowork_segment_names_by_slide", {})[slide_idx] = (
+            seg_names if isinstance(seg_names, list) else []
+        )
+        input_nonce_by_slide = st.session_state.setdefault("chat_input_nonce_by_slide", {})
+        input_nonce_by_slide[slide_idx] = input_nonce_by_slide.get(slide_idx, 0) + 1
+        st.success(
+            "Conversation ended. Summary added to chat. "
+            + (
+                "Use Fill Slide to apply this guidance."
+                if module == "Customer Segmentation"
+                else "Summary will guide downstream SWOT generation."
+            )
+        )
+        _rerun_in_module(module)
+        return
+
+    if action_type == "cowork_fill":
+        draft = action.get("draft", {})
+        draft_data = draft.get("table_data") or []
+        draft_headers = draft.get("column_headers") or []
+        if draft_data and st.session_state.pptx_bytes:
+            fill_payload = {
+                "slide_idx": slide_idx,
+                "module": module,
+                "table_data_b64": base64.b64encode(json.dumps(draft_data).encode()).decode(),
+            }
+            if draft_headers:
+                fill_payload["column_headers_b64"] = base64.b64encode(
+                    json.dumps(draft_headers).encode()
+                ).decode()
+            fill_r = API_SESSION.post(
+                f"{BACKEND_URL}/fill-engine/fill-table",
+                data=fill_payload,
+                files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                timeout=TIMEOUT_FILL_TABLE,
+            )
+            fill_r.raise_for_status()
+            st.session_state.pptx_bytes = base64.b64decode(fill_r.json()["pptx_base64"])
+            st.session_state.table_data_by_slide[slide_idx] = draft_data
+            if draft_headers:
+                st.session_state.setdefault("column_headers_by_slide", {})[slide_idx] = (
+                    draft_headers
+                )
+            st.session_state.filled_slides.add(slide_idx)
+            st.session_state.setdefault("cowork_ready_by_slide", {})[slide_idx] = False
+            st.success("Slide filled from cowork draft!")
+        _rerun_in_module(module)
+        return
+
+    if action_type == "chat_send":
+        user_msg = action.get("user_msg", "").strip()
+        chat_mode = action.get("chat_mode", "modify")
+        if not user_msg:
+            return
+        _append_slide_chat_message(slide_idx, "user", user_msg)
+        current_data = st.session_state.table_data_by_slide.get(slide_idx)
+
+        if chat_mode == "modify":
+            if not table_structure or not current_data:
+                _append_slide_chat_message(
+                    slide_idx,
+                    "assistant",
+                    "Please fill this slide first, then I can help you refine it.",
+                )
+                st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = (
+                    st.session_state.setdefault("chat_input_nonce_by_slide", {}).get(
+                        slide_idx, 0
+                    )
+                    + 1
+                )
+                st.warning("Fill the slide first before refining.")
+                _rerun_in_module(module)
+                return
+
+        if chat_mode == "cowork":
+            sess_map = st.session_state.setdefault("cowork_session_id_by_slide", {})
+            if slide_idx not in sess_map:
+                sess_map[slide_idx] = str(uuid.uuid4())
+            web_allowed = bool(st.session_state.get(f"cowork_web_permission_{slide_idx}", False))
+            chat_endpoint = (
+                f"{BACKEND_URL}/cowork-agent/swot/chat"
+                if module == "SWOT Analysis"
+                else f"{BACKEND_URL}/cowork-agent/cs/chat"
+            )
+            chat_payload = {
+                "session_id": sess_map[slide_idx],
+                "module": module,
+                "slide_idx": slide_idx,
+                "file_ids": module_fids,
+                "table_structure": table_structure,
+                "user_message": user_msg,
+                "conversation_history": chat_history,
+                "allow_web_search": web_allowed,
+            }
+            if module == "SWOT Analysis":
+                cs_summary, cs_table, cs_headers = _get_cs_context_for_swot()
+                if cs_summary:
+                    chat_payload["cs_cowork_summary"] = cs_summary
+                if cs_table:
+                    chat_payload["cs_filled_table"] = cs_table
+                if cs_headers:
+                    chat_payload["cs_filled_headers"] = cs_headers
+            r = API_SESSION.post(chat_endpoint, json=chat_payload, timeout=TIMEOUT_LLM_GENERATION)
+        else:
+            r = API_SESSION.post(
+                f"{BACKEND_URL}/generation/chat",
+                json={
+                    "slide_idx": slide_idx,
+                    "module": module,
+                    "file_ids": module_fids,
+                    "current_content": current_data or [],
+                    "table_structure": table_structure,
+                    "current_column_headers": st.session_state.get("column_headers_by_slide", {}).get(
+                        slide_idx
+                    ),
+                    "user_message": user_msg,
+                    "conversation_history": chat_history,
+                    "mode": chat_mode,
+                },
+                timeout=TIMEOUT_LLM_GENERATION,
+            )
+        r.raise_for_status()
+        payload = r.json()
+
+        if chat_mode == "cowork":
+            workflow = payload.get("workflow", {}) or {}
+            assistant_msg = payload.get(
+                "assistant_message",
+                "I am ready to help you complete this table step by step.",
+            )
+            thinking_msg = payload.get("thinking") or None
+            draft_data = payload.get("draft_table_data") or []
+            draft_headers = payload.get("draft_column_headers") or []
+            st.session_state.setdefault("cowork_draft_by_slide", {})[slide_idx] = {
+                "table_data": draft_data,
+                "column_headers": draft_headers,
+            }
+            st.session_state.setdefault("cowork_ready_by_slide", {})[slide_idx] = bool(
+                workflow.get("ready_for_ppt_fill")
+            )
+        else:
+            thinking_msg = None
+            resolved_mode = payload.get("mode", chat_mode)
+            updated = payload.get("table_data", [])
+            updated_headers = payload.get("column_headers")
+            assistant_msg = payload.get(
+                "assistant_message",
+                (
+                    "Thanks for your feedback. I have updated this slide."
+                    if resolved_mode == "modify"
+                    else "Here is what I found based on your question."
+                ),
+            )
+            if (
+                resolved_mode == "modify"
+                and updated
+                and st.session_state.pptx_bytes
+            ):
+                fill_payload = {
+                    "slide_idx": slide_idx,
+                    "module": module,
+                    "table_data_b64": base64.b64encode(json.dumps(updated).encode()).decode(),
+                }
+                if updated_headers:
+                    fill_payload["column_headers_b64"] = base64.b64encode(
+                        json.dumps(updated_headers).encode()
+                    ).decode()
+                fill_r = API_SESSION.post(
+                    f"{BACKEND_URL}/fill-engine/fill-table",
+                    data=fill_payload,
+                    files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
+                    timeout=TIMEOUT_FILL_TABLE,
+                )
+                fill_r.raise_for_status()
+                st.session_state.pptx_bytes = base64.b64decode(fill_r.json()["pptx_base64"])
+                st.session_state.table_data_by_slide[slide_idx] = updated
+                if updated_headers:
+                    st.session_state.setdefault("column_headers_by_slide", {})[
+                        slide_idx
+                    ] = updated_headers
+
+        _append_slide_chat_message(
+            slide_idx, "assistant", assistant_msg, thinking_msg
+        )
+        st.session_state.setdefault("chat_input_nonce_by_slide", {})[slide_idx] = (
+            st.session_state.setdefault("chat_input_nonce_by_slide", {}).get(slide_idx, 0) + 1
+        )
+        _rerun_in_module(module)
+
+
 def _module_file_ids(module: str) -> list[str]:
     """Return the ingested file_ids for the given module."""
     return st.session_state.file_ids_by_module.get(module, [])
@@ -415,12 +821,16 @@ def render_controls_panel(slide_meta: dict, module: str):
                 f"Ingest {len(new_files)} file{'s' if len(new_files) > 1 else ''}",
                 use_container_width=True,
                 key=f"slide_ingest_{slide_idx}",
+                disabled=_is_processing(),
             ):
-                with st.spinner("Ingesting files…"):
-                    ok = _ingest_only(module, new_files)
-                if ok:
-                    st.caption(f"Updated files: {len(st.session_state.file_ids_by_module[module])}")
-                    _rerun_in_module(module)
+                st.session_state["pending_ingest_files"] = [
+                    (f.name, f.getvalue()) for f in new_files
+                ]
+                _set_pending_and_rerun({
+                    "type": "ingest",
+                    "module": module,
+                    "message": "Ingesting files…",
+                })
 
     st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
@@ -430,98 +840,17 @@ def render_controls_panel(slide_meta: dict, module: str):
         type="primary",
         use_container_width=True,
         key=f"fill_{slide_idx}",
+        disabled=_is_processing(),
     ):
         if not module_fids:
             st.warning("No files ingested for this module yet. Upload files above.")
         else:
-            table_structure = slide_meta.get("table_structure")
-            if not table_structure:
-                with st.spinner("Fetching table structure..."):
-                    try:
-                        r = API_SESSION.post(
-                            f"{BACKEND_URL}/fill-engine/table-structure",
-                            data={"slide_idx": slide_idx, "path": TEMPLATE_PATH},
-                            timeout=TIMEOUT_QUICK,
-                        )
-                        r.raise_for_status()
-                        table_structure = r.json()
-                    except Exception as e:
-                        st.error(f"Table structure error: {e}")
-
-            if table_structure:
-                cowork_summary = st.session_state.setdefault("cowork_summary_by_slide", {}).get(
-                    slide_idx
-                )
-                cowork_segments = st.session_state.setdefault("cowork_segment_names_by_slide", {}).get(
-                    slide_idx
-                )
-                cowork_guidance = None
-                if cowork_summary:
-                    cowork_guidance = {
-                        "summary": cowork_summary,
-                        "segment_names": cowork_segments or [],
-                    }
-                with st.spinner("Generating content…"):
-                    try:
-                        fill_payload = {
-                            "slide_idx": slide_idx,
-                            "module": module,
-                            "file_ids": module_fids,
-                            "table_structure": table_structure,
-                        }
-                        if cowork_guidance:
-                            fill_payload["cowork_guidance"] = cowork_guidance
-                        fill_resp = API_SESSION.post(
-                            f"{BACKEND_URL}/generation/fill",
-                            json=fill_payload,
-                            timeout=TIMEOUT_LLM_GENERATION,
-                        )
-                        fill_resp.raise_for_status()
-                        fill_result = fill_resp.json()
-                        table_data = fill_result.get("table_data", [])
-                        column_headers = fill_result.get("column_headers")  # list[str] | None
-                    except Exception as e:
-                        st.error(f"Generation error: {e}")
-                        table_data = []
-                        column_headers = None
-
-                if column_headers:
-                    st.caption(f"Segments: {', '.join(column_headers)}")
-
-                if table_data and st.session_state.pptx_bytes:
-                    try:
-                        form_data: dict = {
-                            "slide_idx": slide_idx,
-                            "module": module,
-                            "table_data_b64": base64.b64encode(
-                                json.dumps(table_data).encode()
-                            ).decode(),
-                        }
-                        if column_headers:
-                            form_data["column_headers_b64"] = base64.b64encode(
-                                json.dumps(column_headers).encode()
-                            ).decode()
-
-                        fill_r = API_SESSION.post(
-                            f"{BACKEND_URL}/fill-engine/fill-table",
-                            data=form_data,
-                            files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                            timeout=TIMEOUT_FILL_TABLE,
-                        )
-                        fill_r.raise_for_status()
-                        st.session_state.pptx_bytes = base64.b64decode(
-                            fill_r.json()["pptx_base64"]
-                        )
-                        st.session_state.filled_slides.add(slide_idx)
-                        st.session_state.table_data_by_slide[slide_idx] = table_data
-                        if column_headers:
-                            st.session_state.setdefault("column_headers_by_slide", {})[
-                                slide_idx
-                            ] = column_headers
-                        st.success("Slide filled!")
-                        _rerun_in_module(module)
-                    except Exception as e:
-                        st.error(f"Fill error: {e}")
+            _set_pending_and_rerun({
+                "type": "fill_slide",
+                "module": module,
+                "slide_idx": slide_idx,
+                "message": "Generating content…",
+            })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -570,6 +899,7 @@ def render_web_search_panel(slide_meta: dict):
             "Search",
             use_container_width=True,
             key=f"ws_btn_{slide_idx}",
+            disabled=_is_processing(),
         )
 
     if do_search:
@@ -577,19 +907,13 @@ def render_web_search_panel(slide_meta: dict):
         if not q:
             st.warning("Enter a query before searching.")
         else:
-            with st.spinner("Searching the web…"):
-                try:
-                    resp = API_SESSION.post(
-                        f"{BACKEND_URL}/web-search/search",
-                        json={"query": q, "max_results": 5},
-                        timeout=20,
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    results_store[slide_idx] = data.get("results", [])
-                    query_store[slide_idx] = q
-                except Exception as exc:
-                    st.error(f"Search failed: {exc}")
+            _set_pending_and_rerun({
+                "type": "web_search",
+                "module": slide_meta.get("module", st.session_state.active_module),
+                "slide_idx": slide_idx,
+                "query": q,
+                "message": "Searching the web…",
+            })
 
     results = results_store.get(slide_idx, [])
     if results:
@@ -598,7 +922,7 @@ def render_web_search_panel(slide_meta: dict):
         with col_cap:
             st.caption(f"Top results for: *{html.escape(last_q)}*")
         with col_clr:
-            if st.button("Clear", key=f"ws_clear_{slide_idx}", use_container_width=True):
+            if st.button("Clear", key=f"ws_clear_{slide_idx}", use_container_width=True, disabled=_is_processing()):
                 results_store.pop(slide_idx, None)
                 query_store.pop(slide_idx, None)
                 st.rerun()
@@ -911,6 +1235,7 @@ def render_chat_panel(slide_meta: dict, module: str):
             type="primary",
             use_container_width=True,
             key=f"send_chat_{slide_idx}",
+            disabled=_is_processing(),
         )
     with (action_m if action_m is not None else action_r):
         clear_clicked = st.button(
@@ -918,6 +1243,7 @@ def render_chat_panel(slide_meta: dict, module: str):
             type="secondary",
             use_container_width=True,
             key=f"clear_chat_{slide_idx}",
+            disabled=_is_processing(),
         )
     end_conversation_clicked = False
     if action_m is not None:
@@ -928,6 +1254,7 @@ def render_chat_panel(slide_meta: dict, module: str):
                 use_container_width=True,
                 key=f"end_conversation_{slide_idx}",
                 help="Generate a summary of what was discussed.",
+                disabled=_is_processing(),
             )
     if cowork_ready and cowork_draft:
         if st.button(
@@ -935,44 +1262,31 @@ def render_chat_panel(slide_meta: dict, module: str):
             type="primary",
             use_container_width=True,
             key=f"cowork_fill_{slide_idx}",
+            disabled=_is_processing(),
         ):
             draft_data = cowork_draft.get("table_data") or []
             draft_headers = cowork_draft.get("column_headers") or []
             if draft_data and st.session_state.pptx_bytes:
-                try:
-                    fill_payload = {
-                        "slide_idx": slide_idx,
-                        "table_data_b64": base64.b64encode(
-                            json.dumps(draft_data).encode()
-                        ).decode(),
-                        "module": module,
-                    }
-                    if draft_headers:
-                        fill_payload["column_headers_b64"] = base64.b64encode(
-                            json.dumps(draft_headers).encode()
-                        ).decode()
-                    fill_r = API_SESSION.post(
-                        f"{BACKEND_URL}/fill-engine/fill-table",
-                        data=fill_payload,
-                        files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
-                        timeout=TIMEOUT_FILL_TABLE,
-                    )
-                    fill_r.raise_for_status()
-                    st.session_state.pptx_bytes = base64.b64decode(fill_r.json()["pptx_base64"])
-                    st.session_state.table_data_by_slide[slide_idx] = draft_data
-                    if draft_headers:
-                        st.session_state.setdefault("column_headers_by_slide", {})[slide_idx] = draft_headers
-                    st.session_state.filled_slides.add(slide_idx)
-                    st.session_state.setdefault("cowork_ready_by_slide", {})[slide_idx] = False
-                    st.success("Slide filled from cowork draft!")
-                    _rerun_in_module(module)
-                except Exception as e:
-                    st.error(f"Cowork fill failed: {e}")
+                _set_pending_and_rerun({
+                    "type": "cowork_fill",
+                    "module": module,
+                    "slide_idx": slide_idx,
+                    "draft": {"table_data": draft_data, "column_headers": draft_headers},
+                    "message": "Filling slide…",
+                })
             else:
                 st.warning("Cowork draft is not ready yet.")
 
     if chat_mode == "cowork" and end_conversation_clicked:
-        sess_map = st.session_state.setdefault("cowork_session_id_by_slide", {})
+        _set_pending_and_rerun({
+            "type": "end_conversation",
+            "module": module,
+            "slide_idx": slide_idx,
+            "message": "Generating summary…",
+        })
+        return
+
+    if clear_clicked:
         if slide_idx not in sess_map:
             sess_map[slide_idx] = str(uuid.uuid4())
         with st.spinner("Generating summary…"):
@@ -1037,11 +1351,23 @@ def render_chat_panel(slide_meta: dict, module: str):
             st.warning("Please enter a message.")
         return
 
-    table_structure = slide_meta.get("table_structure")
-    current_data = st.session_state.table_data_by_slide.get(slide_idx)
-    history_snapshot = list(chat_history)
+    # Queue chat send for deferred execution (overlay + no button response during processing)
     clean_user_msg = user_msg.strip()
-    _append_slide_chat_message(slide_idx, "user", clean_user_msg)
+    _set_pending_and_rerun({
+        "type": "chat_send",
+        "module": module,
+        "slide_idx": slide_idx,
+        "user_msg": clean_user_msg,
+        "chat_mode": chat_mode,
+        "message": "Thinking…",
+    })
+    return
+
+    if False:  # chat_send now uses pending
+        table_structure = slide_meta.get("table_structure")
+        current_data = st.session_state.table_data_by_slide.get(slide_idx)
+        history_snapshot = list(chat_history)
+        _append_slide_chat_message(slide_idx, "user", clean_user_msg)
 
     if chat_mode == "modify":
         if not table_structure or not current_data:
@@ -1208,7 +1534,7 @@ def render_module_tab(module: str, slides: list):
             "← Back",
             use_container_width=True,
             key=f"prev_{module}_{cur}",
-            disabled=cur == 0,
+            disabled=(cur == 0) or _is_processing(),
         ):
             st.session_state.current_page_by_module[module] -= 1
             _rerun_in_module(module)
@@ -1240,7 +1566,7 @@ def render_module_tab(module: str, slides: list):
             "Next →",
             use_container_width=True,
             key=f"next_{module}_{cur}",
-            disabled=cur == total_pages - 1,
+            disabled=(cur == total_pages - 1) or _is_processing(),
         ):
             st.session_state.current_page_by_module[module] += 1
             _rerun_in_module(module)
@@ -1311,6 +1637,13 @@ def main():
     )
     init_session_state()
 
+    # ── Processing lock: when a long-running action is queued, show overlay and execute ──
+    pending = st.session_state.get("pending_action")
+    if pending:
+        st.markdown(PROCESSING_OVERLAY_HTML, unsafe_allow_html=True)
+        _execute_pending_action()
+        return
+
     # ── Welcome page ───────────────────────────────────────────────────────
     if not st.session_state.started:
         if "welcome_product" not in st.session_state:
@@ -1367,7 +1700,7 @@ def main():
                 "Start",
                 type="primary",
                 use_container_width=True,
-                disabled=not product_picked,
+                disabled=(not product_picked) or _is_processing(),
             ):
                 st.session_state.started = True
                 st.session_state.selected_product = selected_product
@@ -1383,7 +1716,7 @@ def main():
     slide_info = st.session_state.slide_info
     if not slide_info:
         st.warning("No slide info loaded.")
-        if st.button("Restart"):
+        if st.button("Restart", disabled=_is_processing()):
             st.session_state.started = False
             st.rerun()
         return
