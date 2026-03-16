@@ -1,38 +1,151 @@
 """
-DashScope Qwen ASR Realtime client — decoupled module for speech-to-text.
+DashScope Qwen ASR Realtime client — uses official dashscope SDK for speech-to-text.
 
-Connects to wss://dashscope.aliyuncs.com/api-ws/v1/realtime
-and transcribes PCM 16kHz mono audio. Supports server-side VAD.
+Connects via dashscope.audio.qwen_omni to wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+and transcribes PCM 16kHz mono audio. Supports partial and final results via callbacks.
 """
 
 import base64
 import io
-import json
 import logging
 import os
-import threading
 import time
 
-import websocket
+import dashscope
+from websocket import WebSocketConnectionClosedException
 
 logger = logging.getLogger(__name__)
 
+# API key: support DASHSCOPE_API_KEY or QWEN_API_KEY for compatibility
 API_KEY = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY")
 QWEN_MODEL = os.environ.get("QWEN_ASR_MODEL", "qwen3-asr-flash-realtime")
-BASE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+ASR_DEBUG = os.environ.get("ASR_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+# Beijing region; use wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime for Singapore
+BASE_URL = os.environ.get("DASHSCOPE_REALTIME_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/realtime")
+CHUNK_SIZE = 3200
+CHUNK_DELAY_FACTOR = float(os.environ.get("ASR_CHUNK_DELAY_FACTOR", "1.0"))
+END_SESSION_WAIT_SECONDS = float(os.environ.get("ASR_END_SESSION_WAIT_SECONDS", "3.0"))
+SESSION_READY_WAIT_SECONDS = float(os.environ.get("ASR_SESSION_READY_WAIT_SECONDS", "2.0"))
+
+
+def _debug(msg: str, *args):
+    """Best-effort ASR debug output even when logger isn't configured."""
+    if not ASR_DEBUG:
+        return
+    try:
+        text = msg % args if args else msg
+    except Exception:
+        text = f"{msg} {args}"
+    print(f"[ASR_DEBUG] {text}", flush=True)
+
+
+def _init_api_key():
+    """Initialize DashScope API key."""
+    dashscope.api_key = API_KEY or "YOUR_API_KEY"
+    if dashscope.api_key == "YOUR_API_KEY":
+        logger.warning(
+            "DASHSCOPE_API_KEY not set. Set DASHSCOPE_API_KEY or QWEN_API_KEY environment variable."
+        )
+
+
+class _ASRCallback:
+    """
+    Callback handler for DashScope OmniRealtime ASR events.
+    Collects partial (stash) and final (transcript) results and invokes user callbacks.
+    """
+
+    def __init__(self, on_partial=None, on_final=None, final_transcript=None):
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self.final_transcript = final_transcript or []
+        self.last_partial = ""
+        self.close_reason: str | None = None
+        self.session_ready = False
+        self.session_finished = False
+        self.handlers = {
+            "session.created": self._handle_session_created,
+            "session.updated": self._handle_session_updated,
+            "session.finished": self._handle_session_finished,
+            "conversation.item.input_audio_transcription.completed": self._handle_final_text,
+            "conversation.item.input_audio_transcription.text": self._handle_stash_text,
+        }
+
+    def on_open(self):
+        logger.debug("ASR connection opened")
+
+    def on_close(self, code, msg):
+        # WebSocket close frame: optionally 2-byte code + UTF-8 reason. Extract readable text.
+        if isinstance(msg, bytes) and len(msg) > 2:
+            msg = msg[2:].decode("utf-8", errors="replace")  # skip close code
+        raw = msg if isinstance(msg, str) else (msg.decode("utf-8", errors="replace") if msg else None)
+        if raw:
+            raw = "".join(c for c in raw if c.isprintable() or c in " \t").strip()
+        self.close_reason = raw or (f"code={code}" if code else "Connection closed by server")
+        logger.debug("ASR connection closed: code=%s reason=%s", code, self.close_reason)
+
+    def on_event(self, response):
+        try:
+            event_type = response.get("type")
+            handler = self.handlers.get(event_type)
+            if handler:
+                handler(response)
+            elif ASR_DEBUG:
+                _debug("ASR unhandled event: %s", event_type)
+        except Exception as e:
+            logger.warning("ASR callback error: %s", e)
+
+    def _handle_session_created(self, response):
+        logger.debug("ASR session started: %s", response.get("session", {}).get("id", ""))
+
+    def _handle_session_updated(self, response):
+        self.session_ready = True
+        if ASR_DEBUG:
+            _debug("ASR session updated event received (ready for audio)")
+
+    def _handle_session_finished(self, response):
+        self.session_finished = True
+        if ASR_DEBUG:
+            _debug("ASR session finished event received")
+
+    def _handle_final_text(self, response):
+        transcript = response.get("transcript", "")
+        if transcript:
+            self.final_transcript.append(transcript)
+            if self.on_final:
+                self.on_final(transcript)
+            logger.debug("ASR final: %s", transcript)
+
+    def _handle_stash_text(self, response):
+        stash = response.get("stash", "")
+        if stash:
+            self.last_partial = stash
+            if self.on_partial:
+                self.on_partial(stash)
+            logger.debug("ASR partial: %s", stash)
+
+
+def _read_audio_chunks(pcm_bytes: bytes, chunk_size: int = CHUNK_SIZE):
+    """Yield PCM audio in chunks."""
+    offset = 0
+    while offset < len(pcm_bytes):
+        chunk = pcm_bytes[offset : offset + chunk_size]
+        if chunk:
+            yield chunk
+        offset += chunk_size
 
 
 def transcribe_audio_stream(
     pcm_bytes: bytes,
     *,
     sample_rate: int = 16000,
+    sample_width_bytes: int = 2,
     language: str = "en",
     enable_vad: bool = True,
-    on_partial: callable = None,
-    on_final: callable = None,
+    on_partial=None,
+    on_final=None,
 ) -> str:
     """
-    Send PCM audio to DashScope ASR and collect transcription via callbacks.
+    Send PCM audio to DashScope ASR via official SDK and collect transcription.
 
     Args:
         pcm_bytes: Raw PCM 16-bit mono audio.
@@ -48,130 +161,120 @@ def transcribe_audio_stream(
     if not API_KEY:
         raise ValueError("DASHSCOPE_API_KEY or QWEN_API_KEY environment variable is not set.")
 
-    url = f"{BASE_URL}?model={QWEN_MODEL}"
-    headers = [
-        f"Authorization: Bearer {API_KEY}",
-        "OpenAI-Beta: realtime=v1",
-    ]
+    _init_api_key()
 
     final_transcript: list[str] = []
-    partial_text: list[str] = []
-    session_ready = threading.Event()
-
-    def _on_open(ws):
-        session = {
-            "modalities": ["text"],
-            "input_audio_transcription": {
-                "language": language,
-                "sample_rate": sample_rate,
-                "input_audio_format": "pcm",
-            },
-            "turn_detection": (
-                {
-                    "type": "server_vad",
-                    "threshold": 0.2,
-                    "silence_duration_ms": 800,
-                }
-                if enable_vad
-                else None
-            ),
-        }
-        event = {"event_id": "session_init", "type": "session.update", "session": session}
-        ws.send(json.dumps(event))
-        logger.info("Session initialized")
-
-    def _on_message(ws, message):
-        try:
-            data = json.loads(message)
-            event_type = data.get("type", "")
-            logger.debug("ASR event: %s", event_type)
-            # Session ready — must wait before sending audio
-            if event_type in ("session.updated", "session.created"):
-                session_ready.set()
-            # Interim/stash transcription — DashScope sends data["stash"]
-            elif event_type == "conversation.item.input_audio_transcription.text":
-                transcript = data.get("stash", "")
-                if transcript:
-                    partial_text.clear()
-                    partial_text.append(transcript)
-                    if on_partial:
-                        on_partial(transcript)
-            # Final transcription — DashScope sends data["transcript"]
-            elif event_type == "conversation.item.input_audio_transcription.completed":
-                transcript = data.get("transcript", "")
-                if transcript:
-                    final_transcript.append(transcript)
-                    if on_final:
-                        on_final(transcript)
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON from ASR: %s", message[:200])
-
-    def _on_error(ws, error):
-        logger.error("ASR WebSocket error: %s", error)
-
-    def _on_close(ws, code, msg):
-        logger.info("ASR WebSocket closed: %s %s", code, msg)
-
-    ws = websocket.WebSocketApp(
-        url,
-        header=headers,
-        on_open=_on_open,
-        on_message=_on_message,
-        on_error=_on_error,
-        on_close=_on_close,
+    if ASR_DEBUG:
+        bytes_per_second = sample_rate * max(sample_width_bytes, 1)
+        approx_seconds = len(pcm_bytes) / float(bytes_per_second) if bytes_per_second > 0 else 0.0
+        _debug(
+            "ASR request: model=%s language=%s sample_rate=%s sample_width=%s bytes=%s approx_duration=%.2fs",
+            QWEN_MODEL,
+            language,
+            sample_rate,
+            sample_width_bytes,
+            len(pcm_bytes),
+            approx_seconds,
+        )
+    callback = _ASRCallback(
+        on_partial=on_partial,
+        on_final=on_final,
+        final_transcript=final_transcript,
     )
 
-    # Run WebSocket in a thread and send audio from main thread
-    thread = threading.Thread(target=lambda: ws.run_forever())
-    thread.daemon = True
-    thread.start()
-
-    # Wait for session.updated before sending audio (DashScope requirement)
-    if not session_ready.wait(timeout=10):
-        logger.warning("Did not receive session.updated; proceeding anyway")
-
-    # Send audio in chunks (3200 bytes ≈ 100ms at 16kHz 16-bit mono)
-    chunk_size = 3200
-    offset = 0
-    while offset < len(pcm_bytes):
-        chunk = pcm_bytes[offset : offset + chunk_size]
-        if not chunk:
-            break
-        encoded = base64.b64encode(chunk).decode("utf-8")
-        event = {
-            "event_id": f"audio_{int(time.time() * 1000)}",
-            "type": "input_audio_buffer.append",
-            "audio": encoded,
-        }
-        try:
-            ws.send(json.dumps(event))
-        except Exception as e:
-            logger.error("Failed to send audio chunk: %s", e)
-            break
-        offset += chunk_size
-        time.sleep(0.05)
-
-    # Signal end of session so the server flushes final transcription.
-    # In VAD mode: send session.finish. In manual mode: commit first then finish.
     try:
-        if not enable_vad:
-            ws.send(json.dumps({"event_id": "commit", "type": "input_audio_buffer.commit"}))
-            time.sleep(0.3)
-        ws.send(json.dumps({"event_id": "finish", "type": "session.finish"}))
-    except Exception:
-        pass
+        from dashscope.audio.qwen_omni import OmniRealtimeConversation, OmniRealtimeCallback
+        from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
+        from dashscope.audio.qwen_omni import MultiModality
+    except ImportError as e:
+        raise ImportError(
+            "dashscope SDK with qwen_omni is required. Install with: pip install dashscope>=1.23.9"
+        ) from e
 
-    # Wait for final transcription (up to ~10 s)
-    time.sleep(1.0)
-    for _ in range(45):
-        if final_transcript or not thread.is_alive():
-            break
+    class _CallbackImpl(OmniRealtimeCallback):
+        def __init__(self, inner: _ASRCallback):
+            self._inner = inner
+
+        def on_open(self):
+            self._inner.on_open()
+
+        def on_close(self, code, msg):
+            self._inner.on_close(code, msg)
+
+        def on_event(self, response):
+            self._inner.on_event(response)
+
+    callback_impl = _CallbackImpl(callback)
+    conversation = OmniRealtimeConversation(
+        model=QWEN_MODEL,
+        url=BASE_URL,
+        callback=callback_impl,
+    )
+
+    conversation.connect()
+
+    transcription_params = TranscriptionParams(
+        language=language,
+        sample_rate=sample_rate,
+        input_audio_format="pcm",
+    )
+
+    conversation.update_session(
+        output_modalities=[MultiModality.TEXT],
+        enable_input_audio_transcription=True,
+        transcription_params=transcription_params,
+    )
+
+    try:
+        # Wait for session.updated before sending audio; otherwise early chunks can be dropped.
+        ready_deadline = time.time() + max(0.2, SESSION_READY_WAIT_SECONDS)
+        while time.time() < ready_deadline and not callback.session_ready:
+            if callback.close_reason:
+                raise ValueError(
+                    f"ASR connection closed: {callback.close_reason}. "
+                    "Check DASHSCOPE_API_KEY permissions and region (Beijing URL vs Singapore)."
+                )
+            time.sleep(0.05)
+        if ASR_DEBUG and not callback.session_ready:
+            _debug(
+                "ASR warning: no session.updated within %.2fs; streaming anyway.",
+                max(0.2, SESSION_READY_WAIT_SECONDS),
+            )
+
+        for chunk in _read_audio_chunks(pcm_bytes):
+            if callback.close_reason:
+                raise ValueError(
+                    f"ASR connection closed: {callback.close_reason}. "
+                    "Check DASHSCOPE_API_KEY permissions and region (Beijing URL vs Singapore)."
+                )
+            audio_b64 = base64.b64encode(chunk).decode("ascii")
+            conversation.append_audio(audio_b64)
+            # Pace chunks close to realtime; sending too fast can truncate tail transcription.
+            chunk_seconds = len(chunk) / float(sample_rate * max(sample_width_bytes, 1))
+            time.sleep(max(0.01, chunk_seconds * max(0.1, CHUNK_DELAY_FACTOR)))
+        conversation.end_session()
+        # Give server time to flush trailing transcription events after end_session.
+        wait_deadline = time.time() + max(0.5, END_SESSION_WAIT_SECONDS)
+        while time.time() < wait_deadline and not callback.session_finished:
+            time.sleep(0.1)
+    except WebSocketConnectionClosedException as e:
+        reason = callback.close_reason or "Connection closed by server"
+        hint = (
+            "Model access denied - ensure your API key has ASR model access. "
+            "Singapore region: set DASHSCOPE_REALTIME_URL=wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+        )
+        raise ValueError(f"ASR {reason}. {hint}") from e
+    except Exception as e:
+        logger.exception("ASR error: %s", e)
+        raise
+    finally:
         time.sleep(0.2)
+        conversation.close()
 
-    ws.close()
-    thread.join(timeout=2)
-
-    return " ".join(final_transcript).strip() or " ".join(partial_text).strip()
+    result = " ".join(final_transcript).strip()
+    if not result and callback.last_partial:
+        result = callback.last_partial.strip()
+    return result
 
 
 def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
@@ -179,11 +282,11 @@ def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
     Transcribe audio bytes (WAV, WebM/Opus, etc.). Converts to PCM 16kHz if needed.
 
     Browser MediaRecorder typically outputs WebM/Opus; streamlit-mic-recorder
-    may send WebM rather than WAV. We use from_file() so ffmpeg can auto-detect.
+    may send WebM rather than WAV. Uses from_file() so pydub can auto-detect format.
 
     Args:
         wav_bytes: Audio file bytes (WAV, WebM, etc. from mic recorder).
-        **kwargs: Passed to transcribe_audio_stream.
+        **kwargs: Passed to transcribe_audio_stream (language, on_partial, on_final, etc.).
 
     Returns:
         Final transcript string.
@@ -193,10 +296,39 @@ def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
     except ImportError:
         raise ImportError("pydub is required for audio conversion. pip install pydub")
 
-    # Auto-detect format (WebM/Opus from browser, WAV, etc.) — do not assume WAV
     audio = AudioSegment.from_file(io.BytesIO(wav_bytes))
-    # Resample to 16kHz, convert to mono
-    if audio.frame_rate != 16000 or audio.channels != 1:
-        audio = audio.set_frame_rate(16000).set_channels(1)
+    if ASR_DEBUG:
+        _debug(
+            "ASR input audio: bytes=%s duration=%.2fs frame_rate=%s channels=%s sample_width=%s dBFS=%.2f rms=%s",
+            len(wav_bytes),
+            getattr(audio, "duration_seconds", 0.0),
+            audio.frame_rate,
+            audio.channels,
+            audio.sample_width,
+            audio.dBFS,
+            audio.rms,
+        )
+    if audio.frame_rate != 16000 or audio.channels != 1 or audio.sample_width != 2:
+        # DashScope expects linear PCM; force 16kHz mono 16-bit LE.
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+    if ASR_DEBUG:
+        _debug(
+            "ASR normalized audio: duration=%.2fs frame_rate=%s channels=%s sample_width=%s dBFS=%.2f rms=%s",
+            getattr(audio, "duration_seconds", 0.0),
+            audio.frame_rate,
+            audio.channels,
+            audio.sample_width,
+            audio.dBFS,
+            audio.rms,
+        )
+        if getattr(audio, "duration_seconds", 0.0) < 1.0:
+            _debug("ASR warning: short audio duration (%.2fs), consider speaking longer.", audio.duration_seconds)
+        if audio.dBFS < -35:
+            _debug("ASR warning: low input volume (dBFS=%.2f), consider increasing mic gain.", audio.dBFS)
     pcm = audio.raw_data
-    return transcribe_audio_stream(pcm, sample_rate=16000, **kwargs)
+    return transcribe_audio_stream(
+        pcm,
+        sample_rate=16000,
+        sample_width_bytes=audio.sample_width,
+        **kwargs,
+    )

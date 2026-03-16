@@ -1,6 +1,7 @@
 """Insight Forge - Streamlit frontend for GenAI-powered business plan slide filling."""
 
 import base64
+import hashlib
 import html
 import json
 import markdown
@@ -25,6 +26,7 @@ API_SESSION.trust_env = False
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 TEMPLATE_PATH = os.getenv("TEMPLATE_PPTX_PATH", "/app/example_files/example slides.pptx")
+VOICE_INPUT_LANGUAGE = os.getenv("VOICE_INPUT_LANGUAGE", "zh")
 
 # API timeouts (configurable via .env)
 TIMEOUT_QUICK = float(os.getenv("TIMEOUT_QUICK", "10"))
@@ -790,6 +792,11 @@ def render_chat_panel(slide_meta: dict, module: str):
         input_nonce_by_slide = st.session_state.setdefault("chat_input_nonce_by_slide", {})
         input_nonce = input_nonce_by_slide.get(slide_idx, 0)
         input_key = f"chat_input_{slide_idx}_{input_nonce}"
+        pending_voice_prefill = st.session_state.setdefault("pending_voice_prefill_by_slide", {})
+        if pending_voice_prefill.get(slide_idx):
+            # Prefill before widget creation; Streamlit ignores/blocks late writes.
+            st.session_state[input_key] = pending_voice_prefill[slide_idx]
+            pending_voice_prefill.pop(slide_idx, None)
         mode_col, input_col, voice_col = st.columns([1, 3.6, 0.8], gap="small")
         with mode_col:
             if module == "Customer Segmentation" or module == "SWOT Analysis":
@@ -819,55 +826,73 @@ def render_chat_panel(slide_meta: dict, module: str):
                 autocomplete="off",
             )
         with voice_col:
-            if mic_recorder is None:
+            def _process_voice_bytes(audio_bytes: bytes, audio_id: str):
+                last_processed = st.session_state.setdefault("last_voice_id_by_slide", {})
+                if not audio_bytes or not audio_id or last_processed.get(slide_idx) == audio_id:
+                    return
+                transcript_placeholder = st.empty()
+                transcript_placeholder.caption("🎤 Transcribing...")
+                try:
+                    payload = {
+                        "audio_b64": base64.b64encode(audio_bytes).decode("utf-8"),
+                        "language": VOICE_INPUT_LANGUAGE,
+                    }
+                    with API_SESSION.post(
+                        f"{BACKEND_URL}/voice/transcribe/stream",
+                        json=payload,
+                        stream=True,
+                        timeout=TIMEOUT_LLM_GENERATION,
+                    ) as resp:
+                        resp.raise_for_status()
+                        final_transcript = ""
+                        for line in resp.iter_lines(decode_unicode=True):
+                            if line and line.startswith("data: "):
+                                try:
+                                    data = json.loads(line[6:])
+                                    if data.get("type") == "error":
+                                        transcript_placeholder.caption(
+                                            f"❌ {data.get('message', 'Transcription failed')}"
+                                        )
+                                        break
+                                    t = data.get("transcript", "")
+                                    if t:
+                                        transcript_placeholder.caption(f"🎤 {t}")
+                                        if data.get("type") == "final":
+                                            final_transcript = t
+                                except json.JSONDecodeError:
+                                    pass
+                    if final_transcript:
+                        pending_voice_prefill = st.session_state.setdefault("pending_voice_prefill_by_slide", {})
+                        pending_voice_prefill[slide_idx] = final_transcript
+                        last_voice = st.session_state.setdefault("last_voice_transcript_by_slide", {})
+                        last_voice[slide_idx] = final_transcript
+                except Exception as e:
+                    transcript_placeholder.caption(f"❌ Voice error: {e}")
+                finally:
+                    # Always mark as processed to prevent infinite retry on error
+                    last_processed[slide_idx] = audio_id
+                st.rerun()
+
+            # Prefer Streamlit native recorder: explicit start/stop recording button.
+            if hasattr(st, "audio_input"):
+                voice_key = f"voice_input_{slide_idx}"
+                audio_file = st.audio_input(
+                    "Voice input",
+                    key=voice_key,
+                    label_visibility="collapsed",
+                )
+                if audio_file:
+                    audio_bytes = audio_file.getvalue()
+                    audio_id = hashlib.sha1(audio_bytes).hexdigest() if audio_bytes else ""
+                    _process_voice_bytes(audio_bytes, audio_id)
+            elif mic_recorder is None:
                 st.button("🎤", disabled=True, help="Install streamlit-mic-recorder to enable voice input.")
             else:
                 voice_key = f"voice_input_{slide_idx}"
                 audio_out = st.session_state.get(voice_key + "_output")
                 audio_bytes = audio_out.get("bytes") if isinstance(audio_out, dict) else None
                 audio_id = audio_out.get("id") if isinstance(audio_out, dict) else None
-                last_processed = st.session_state.setdefault("last_voice_id_by_slide", {})
-                if (
-                    audio_bytes
-                    and audio_id
-                    and last_processed.get(slide_idx) != audio_id
-                ):
-                    transcript_placeholder = st.empty()
-                    transcript_placeholder.caption("🎤 Transcribing...")
-                    try:
-                        payload = {
-                            "audio_b64": base64.b64encode(audio_bytes).decode("utf-8"),
-                            "language": "en",
-                        }
-                        with API_SESSION.post(
-                            f"{BACKEND_URL}/voice/transcribe/stream",
-                            json=payload,
-                            stream=True,
-                            timeout=TIMEOUT_LLM_GENERATION,
-                        ) as resp:
-                            resp.raise_for_status()
-                            final_transcript = ""
-                            for line in resp.iter_lines(decode_unicode=True):
-                                if line and line.startswith("data: "):
-                                    try:
-                                        data = json.loads(line[6:])
-                                        t = data.get("transcript", "")
-                                        if t:
-                                            transcript_placeholder.caption(f"🎤 {t}")
-                                            if data.get("type") == "final":
-                                                final_transcript = t
-                                    except json.JSONDecodeError:
-                                        pass
-                        if final_transcript:
-                            st.session_state[input_key] = final_transcript
-                            last_voice = st.session_state.setdefault("last_voice_transcript_by_slide", {})
-                            last_voice[slide_idx] = final_transcript
-                    except Exception as e:
-                        transcript_placeholder.caption(f"❌ Voice error: {e}")
-                    finally:
-                        # Always mark as processed to prevent infinite retry on error
-                        last_processed[slide_idx] = audio_id
-                    st.rerun()
+                _process_voice_bytes(audio_bytes, str(audio_id or ""))
                 mic_recorder(
                     start_prompt="🎤",
                     stop_prompt="⏹",

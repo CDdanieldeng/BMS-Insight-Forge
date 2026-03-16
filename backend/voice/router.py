@@ -32,10 +32,9 @@ class TranscribeResponse(BaseModel):
 def _transcribe_with_streaming(wav_bytes: bytes, language: str = "en"):
     """
     Generator that yields SSE events for partial and final transcripts.
-    Queue items: ("partial", str) | ("final_segment", str) | ("done", full_result)
+    Queue items: ("partial", str) | ("final_segment", str) | ("done", str) | ("error", str)
     """
     q: queue.Queue[tuple[str | None, str | None]] = queue.Queue()
-    result_holder: list[str] = []
 
     def on_partial(t: str):
         if t:
@@ -56,7 +55,7 @@ def _transcribe_with_streaming(wav_bytes: bytes, language: str = "en"):
             q.put(("done", full))
         except Exception as e:
             logger.exception("ASR transcription error: %s", e)
-            q.put(("done", str(e)))
+            q.put(("error", str(e)))
         finally:
             q.put((None, None))  # Sentinel to stop generator
 
@@ -64,6 +63,7 @@ def _transcribe_with_streaming(wav_bytes: bytes, language: str = "en"):
     thread.start()
 
     final_transcript = ""
+    best_partial = ""
     while True:
         try:
             kind, payload = q.get(timeout=60)
@@ -72,13 +72,25 @@ def _transcribe_with_streaming(wav_bytes: bytes, language: str = "en"):
         if kind is None:
             break
         if kind == "partial":
+            if payload and len(payload) > len(best_partial):
+                best_partial = payload
             yield f"data: {json.dumps({'type': 'partial', 'transcript': payload})}\n\n"
         elif kind == "final_segment":
             yield f"data: {json.dumps({'type': 'final_segment', 'transcript': payload})}\n\n"
             final_transcript = (final_transcript + " " + payload).strip()
+        elif kind == "error":
+            logger.error("Voice ASR error (returning error event): %s", payload)
+            yield f"data: {json.dumps({'type': 'error', 'message': payload or 'Transcription failed'})}\n\n"
+            break
         elif kind == "done":
-            final_transcript = payload or final_transcript
-            # Debug: print API result to terminal to verify backend returns transcript
+            # Do not overwrite streamed final segments with a shorter/truncated done payload.
+            if not final_transcript:
+                final_transcript = payload or ""
+            elif payload and len(payload.strip()) > len(final_transcript):
+                final_transcript = payload.strip()
+            # If still empty, fall back to the best partial seen in stream.
+            if not final_transcript and best_partial:
+                final_transcript = best_partial
             if final_transcript:
                 print(f"[VOICE] API returned transcript: {repr(final_transcript)}", flush=True)
             else:
@@ -115,7 +127,7 @@ def transcribe_stream(req: TranscribeRequest):
     Transcribe WAV audio and stream partial + final results via Server-Sent Events.
     Frontend can consume the stream to show live transcription in the chatbox.
     """
-    print("[voice] transcribe/stream: request received")
+    print(f"[voice] transcribe/stream: request received, language={req.language}")
     try:
         wav_bytes = base64.b64decode(req.audio_b64)
     except Exception as e:
@@ -124,7 +136,7 @@ def transcribe_stream(req: TranscribeRequest):
     if not wav_bytes:
         raise HTTPException(status_code=400, detail="Empty audio data")
 
-    print(f"[voice] transcribe/stream: audio decoded, {len(wav_bytes)} bytes")
+    print(f"[voice] transcribe/stream: audio decoded, {len(wav_bytes)} bytes, language={req.language}")
 
     def gen():
         for chunk in _transcribe_with_streaming(wav_bytes, req.language):
