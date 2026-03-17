@@ -12,6 +12,8 @@ from generation.session_cache import (
 )
 from generation.utils import normalize_label
 
+NOT_FOUND_TEXT = "Not found in provided materials."
+
 # Row indexes that identify Messaging Strategy slide 3.
 MESSAGING_STRATEGY_SLIDE3_INDEXES = [
     "target/prioritized segment",
@@ -87,6 +89,27 @@ def merge_context_for_slide(
     if normalize_label(module) == "swot analysis":
         return merge_context_swot(slide_idx, uploaded_content)
     return uploaded_content
+
+
+def postprocess_uniform_rows(table_data: list[list[str]]) -> list[list[str]]:
+    """
+    Replace rows where all cells have the same content with 'Not found in provided materials.'
+    When the model outputs identical content across all segment columns, it indicates
+    it could not find segment-specific information in the materials.
+    """
+    if not table_data:
+        return table_data
+    result: list[list[str]] = []
+    for row in table_data:
+        if not row or len(row) < 2:
+            result.append(list(row) if row else [])
+            continue
+        vals = [str(c).strip() for c in row]
+        if len(set(vals)) == 1:
+            result.append([NOT_FOUND_TEXT] * len(row))
+        else:
+            result.append(list(row))
+    return result
 
 
 def postprocess_table_for_slide(

@@ -13,6 +13,10 @@ from fill_engine.engine import (
     load_presentation,
 )
 from fill_engine.slide_renderer import render_slide_to_png
+from fill_engine.swot_placeholder_fill import (
+    fill_swot_placeholders,
+    table_data_to_swot_values,
+)
 
 router = APIRouter(prefix="/fill-engine", tags=["fill-engine"])
 logger = __import__("logging").getLogger("fill_engine")
@@ -128,6 +132,48 @@ async def fill_table_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Failed to fill table: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fill-swot-placeholders")
+async def fill_swot_placeholders_endpoint(
+    slide_idx: int = Form(...),
+    file: UploadFile = File(...),
+    table_data_b64: str = Form(...),
+) -> dict[str, str]:
+    """
+    Fill SWOT slide with placeholder template (Placeholder-strengths, etc.).
+    Use this when slide uses placeholders instead of table.
+
+    table_data_b64: base64-encoded JSON [[strengths, weaknesses, opportunities, threats]]
+    """
+    import json
+
+    if not file.filename or not file.filename.lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Expected .pptx file")
+
+    content = await file.read()
+
+    try:
+        table_data_raw = base64.b64decode(table_data_b64).decode("utf-8")
+        table_data = json.loads(table_data_raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid table_data: {e}")
+
+    if not isinstance(table_data, list):
+        raise HTTPException(status_code=400, detail="table_data must be a list")
+
+    strengths, weaknesses, opportunities, threats = table_data_to_swot_values(table_data)
+
+    try:
+        result_bytes = fill_swot_placeholders(
+            content, slide_idx, strengths, weaknesses, opportunities, threats
+        )
+        return {"pptx_base64": base64.b64encode(result_bytes).decode("utf-8")}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to fill SWOT placeholders: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

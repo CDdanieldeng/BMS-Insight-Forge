@@ -219,19 +219,27 @@ def _execute_pending_action():
                     table_data = fill_result.get("table_data", [])
                     column_headers = fill_result.get("column_headers")
                     if table_data:
+                        # Temporary: use placeholder fill for new SWOT template
+                        is_swot_ph = bool(slide_meta.get("is_swot_placeholder_template"))
                         form_data = {
                             "slide_idx": slide_idx,
-                            "module": module,
                             "table_data_b64": base64.b64encode(
                                 json.dumps(table_data).encode()
                             ).decode(),
                         }
-                        if column_headers:
-                            form_data["column_headers_b64"] = base64.b64encode(
-                                json.dumps(column_headers).encode()
-                            ).decode()
+                        fill_endpoint = (
+                            f"{BACKEND_URL}/fill-engine/fill-swot-placeholders"
+                            if is_swot_ph
+                            else f"{BACKEND_URL}/fill-engine/fill-table"
+                        )
+                        if not is_swot_ph:
+                            form_data["module"] = module
+                            if column_headers:
+                                form_data["column_headers_b64"] = base64.b64encode(
+                                    json.dumps(column_headers).encode()
+                                ).decode()
                         fill_r = API_SESSION.post(
-                            f"{BACKEND_URL}/fill-engine/fill-table",
+                            fill_endpoint,
                             data=form_data,
                             files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
                             timeout=TIMEOUT_FILL_TABLE,
@@ -347,17 +355,24 @@ def _run_chat_or_cowork_action(action: dict):
         draft_data = draft.get("table_data") or []
         draft_headers = draft.get("column_headers") or []
         if draft_data and st.session_state.pptx_bytes:
+            is_swot_ph = bool(slide_meta and slide_meta.get("is_swot_placeholder_template"))
             fill_payload = {
                 "slide_idx": slide_idx,
-                "module": module,
                 "table_data_b64": base64.b64encode(json.dumps(draft_data).encode()).decode(),
             }
-            if draft_headers:
-                fill_payload["column_headers_b64"] = base64.b64encode(
-                    json.dumps(draft_headers).encode()
-                ).decode()
+            fill_endpoint = (
+                f"{BACKEND_URL}/fill-engine/fill-swot-placeholders"
+                if is_swot_ph
+                else f"{BACKEND_URL}/fill-engine/fill-table"
+            )
+            if not is_swot_ph:
+                fill_payload["module"] = module
+                if draft_headers:
+                    fill_payload["column_headers_b64"] = base64.b64encode(
+                        json.dumps(draft_headers).encode()
+                    ).decode()
             fill_r = API_SESSION.post(
-                f"{BACKEND_URL}/fill-engine/fill-table",
+                fill_endpoint,
                 data=fill_payload,
                 files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
                 timeout=TIMEOUT_FILL_TABLE,
@@ -484,17 +499,24 @@ def _run_chat_or_cowork_action(action: dict):
                 and updated
                 and st.session_state.pptx_bytes
             ):
+                is_swot_ph = bool(slide_meta and slide_meta.get("is_swot_placeholder_template"))
                 fill_payload = {
                     "slide_idx": slide_idx,
-                    "module": module,
                     "table_data_b64": base64.b64encode(json.dumps(updated).encode()).decode(),
                 }
-                if updated_headers:
-                    fill_payload["column_headers_b64"] = base64.b64encode(
-                        json.dumps(updated_headers).encode()
-                    ).decode()
+                fill_endpoint = (
+                    f"{BACKEND_URL}/fill-engine/fill-swot-placeholders"
+                    if is_swot_ph
+                    else f"{BACKEND_URL}/fill-engine/fill-table"
+                )
+                if not is_swot_ph:
+                    fill_payload["module"] = module
+                    if updated_headers:
+                        fill_payload["column_headers_b64"] = base64.b64encode(
+                            json.dumps(updated_headers).encode()
+                        ).decode()
                 fill_r = API_SESSION.post(
-                    f"{BACKEND_URL}/fill-engine/fill-table",
+                    fill_endpoint,
                     data=fill_payload,
                     files={"file": ("deck.pptx", st.session_state.pptx_bytes)},
                     timeout=TIMEOUT_FILL_TABLE,

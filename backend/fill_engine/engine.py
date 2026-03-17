@@ -10,6 +10,8 @@ from pptx.util import Pt
 
 from shared.logging_config import setup_logging
 
+from fill_engine.swot_placeholder_fill import slide_has_swot_placeholders
+
 logger = setup_logging("fill_engine")
 
 # Project root: parent of backend/ (fill_engine is backend/fill_engine/)
@@ -107,15 +109,28 @@ def get_slide_info(pptx_bytes: bytes | None = None, pptx_path: str | Path | None
         tables = [s for s in slide.shapes if s.has_table]
         is_fillable = len(tables) == 1
 
-        entry: dict[str, Any] = {
+        # Temporary: detect SWOT placeholder template (placeholders instead of table)
+        is_swot_placeholder = (
+            current_module == "SWOT Analysis"
+            and slide_has_swot_placeholders(slide)
+            and len(tables) == 0
+        )
+        if is_swot_placeholder:
+            is_fillable = True
+
+        entry = {
             "idx": idx,
             "is_fillable": is_fillable,
             "module": current_module or "Unknown",
         }
-
-        if is_fillable:
+        if is_swot_placeholder:
+            entry["is_swot_placeholder_template"] = True
+            entry["table_structure"] = {
+                "columns": ["Strengths", "Weaknesses", "Opportunities", "Threats"],
+                "indexes": [],
+            }
+        elif is_fillable and tables:
             structure = _extract_table_structure(tables[0].table)
-            # SWOT uses only the four column names (S,W,O,T) as guide; ignore indexes.
             if current_module == "SWOT Analysis":
                 structure = dict(structure)
                 structure["indexes"] = []

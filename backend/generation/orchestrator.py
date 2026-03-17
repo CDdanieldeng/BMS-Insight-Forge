@@ -19,6 +19,7 @@ from generation.module_handlers import (
     is_messaging_strategy_slide3,
     merge_context_for_slide,
     postprocess_table_for_slide,
+    postprocess_uniform_rows,
 )
 from generation.utils import has_placeholder_columns, normalize_label
 from generation.segment_extractor import extract_segment_names
@@ -290,6 +291,7 @@ def run_fill(
                     )
 
                     with stage_scope("cache_update"):
+                        table_data = postprocess_uniform_rows(table_data)
                         set_slide_table(slide_idx, {
                             "slide_idx": slide_idx,
                             "module": module,
@@ -374,6 +376,9 @@ def run_fill(
         if is_ms_slide3:
             with stage_scope("messaging_strategy_slide3_postprocess"):
                 table_data = postprocess_table_for_slide(module, slide_idx, table_data, indexes)
+
+        # ── Replace uniform rows (same content across all cells) with Not found ──
+        table_data = postprocess_uniform_rows(table_data)
 
         with stage_scope("trace_persist"):
             if fill_trace is not None:
