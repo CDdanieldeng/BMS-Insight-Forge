@@ -2,6 +2,7 @@ version: "3.8"
 
 services:
   backend:
+    image: bms-insight-forge/backend:v1.0.0
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -20,6 +21,7 @@ services:
       start_period: 5s
 
   frontend:
+    image: bms-insight-forge/frontend:v1.0.0
     build:
       context: ./frontend
       dockerfile: Dockerfile
