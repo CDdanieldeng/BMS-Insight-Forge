@@ -180,7 +180,10 @@ def _execute_pending_action():
                 module_slides = slides_by_module.get(module, [])
                 slide_meta = next((s for s in module_slides if s["idx"] == slide_idx), None)
                 module_fids = _module_file_ids(module)
-                if slide_meta and module_fids and st.session_state.pptx_bytes:
+                can_fill = slide_meta and st.session_state.pptx_bytes and (
+                    module_fids or module == "Messaging Strategy"
+                )
+                if can_fill:
                     table_structure = slide_meta.get("table_structure")
                     if not table_structure:
                         r = API_SESSION.post(
@@ -868,7 +871,7 @@ def render_controls_panel(slide_meta: dict, module: str):
         key=f"fill_{slide_idx}",
         disabled=_is_processing(),
     ):
-        if not module_fids:
+        if not module_fids and module != "Messaging Strategy":
             st.warning("No files ingested for this module yet. Upload files above.")
         else:
             _set_pending_and_rerun({
