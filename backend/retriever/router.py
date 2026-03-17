@@ -67,6 +67,7 @@ async def ingest(files: list[UploadFile] = File(...)) -> dict[str, Any]:
     Returns file_id for each file.
     """
     result = {"file_ids": [], "errors": []}
+    logger.info("Ingest received %d files", len(files))
 
     for file in files:
         if not file.filename:

@@ -151,11 +151,24 @@ def _read_through(chunks: list[ChunkRecord], seed_query: str, max_read: int) -> 
 
 
 def _fallback_context(file_ids: list[str], query: str, top_k: int) -> str:
+    """BM25 fallback with per-doc cap so multiple files contribute to context."""
     all_chunks: list[ChunkRecord] = []
     for fid in file_ids:
         all_chunks.extend(_chunk_store.get(fid, []))
-    top = bm25_retrieve_records(all_chunks, query, top_k=top_k)
-    return "\n\n---\n\n".join(chunk.as_text_block() for chunk in top)
+    top = bm25_retrieve_records(all_chunks, query, top_k=top_k * 2)  # over-fetch for diversity
+    unique_docs = len({c.doc_id for c in top})
+    max_per_doc = max(15, top_k // max(1, unique_docs))
+    doc_counts: dict[str, int] = {}
+    capped: list[ChunkRecord] = []
+    for c in top:
+        if len(capped) >= top_k:
+            break
+        n = doc_counts.get(c.doc_id, 0)
+        if n >= max_per_doc:
+            continue
+        doc_counts[c.doc_id] = n + 1
+        capped.append(c)
+    return "\n\n---\n\n".join(chunk.as_text_block() for chunk in capped)
 
 
 def run_evidence_pipeline(
@@ -338,9 +351,16 @@ def run_evidence_pipeline(
             f"[evidence:{idx + 1}] {item['text']} (source={item['chunk_id']}, meta={item.get('metadata')})"
             for idx, item in enumerate(snippets)
         )
+        # Track doc diversity: chunk_id format is doc_id:hex
+        unique_docs_in_result = len({s["chunk_id"].split(":")[0] for s in snippets})
+        metrics["unique_docs_in_result"] = unique_docs_in_result
         metrics["degraded"] = False
         metrics["total_ms"] = int((time.perf_counter() - start) * 1000)
-        logger.info("Evidence pipeline done metrics=%s", metrics)
+        logger.info(
+            "Evidence pipeline done metrics=%s unique_docs_in_result=%d",
+            metrics,
+            unique_docs_in_result,
+        )
         return EvidencePipelineResult(
             context_text=context_text,
             snippets=snippets,

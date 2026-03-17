@@ -604,9 +604,13 @@ def _ingest_only(module: str, uploaded_files) -> bool:
     Replaces the current module's file_ids.
     Returns True on success.
     """
+    # Use BytesIO so requests sends proper multipart; (name, bytes) may not work
+    # for all server implementations when multiple files share the same form key.
+    from io import BytesIO
+
     resp = API_SESSION.post(
         f"{BACKEND_URL}/retriever/ingest",
-        files=[("files", (f.name, f.getvalue())) for f in uploaded_files],
+        files=[("files", (f.name, BytesIO(f.getvalue()))) for f in uploaded_files],
         timeout=TIMEOUT_INGEST,
     )
     if not resp.ok:
