@@ -3,10 +3,11 @@
 import re
 from typing import Any
 
-# Module-level cache: module_name -> extracted segment names.
-# Populated on the first slide that triggers extraction; reused on subsequent
-# slides of the same module within the same backend session.
-_segment_name_cache: dict[str, list[str]] = {}
+# Module-level cache: module_name -> (segment_names, slide_idx).
+# Populated on the first CS slide that triggers extraction; reused only on
+# subsequent slides (slide_idx > cached_slide_idx) of the same module.
+# This avoids reusing stale cache when user refreshes and re-runs slide 1.
+_segment_name_cache: dict[str, tuple[list[str], int]] = {}
 
 # Module-level cache: slide_idx -> generated table metadata.
 # Used to provide prior slide table outputs as context for downstream slides.
@@ -17,14 +18,27 @@ def _normalize_label(label: str) -> str:
     return " ".join((label or "").strip().lower().split())
 
 
-def get_segment_names(module: str) -> list[str] | None:
-    """Return cached segment names for module, or None if not cached."""
-    return _segment_name_cache.get(module)
+def get_segment_names(module: str, current_slide_idx: int) -> list[str] | None:
+    """
+    Return cached segment names for module, or None if not cached or invalid.
+
+    Cache is valid only when current_slide_idx > cached_slide_idx (i.e. we are
+    on a later slide than the one that produced the cache). This ensures:
+    - Slide 2+ can reuse segments from slide 1.
+    - Refreshing and re-running slide 1 does NOT reuse stale cache.
+    """
+    entry = _segment_name_cache.get(module)
+    if entry is None:
+        return None
+    names, cached_slide_idx = entry
+    if current_slide_idx <= cached_slide_idx:
+        return None
+    return names
 
 
-def set_segment_names(module: str, names: list[str]) -> None:
-    """Cache segment names for module."""
-    _segment_name_cache[module] = names
+def set_segment_names(module: str, names: list[str], slide_idx: int) -> None:
+    """Cache segment names for module, produced by the given slide_idx."""
+    _segment_name_cache[module] = (names, slide_idx)
 
 
 def clear_segment_names() -> None:

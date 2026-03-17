@@ -960,7 +960,6 @@ class CustomerSegmentationAgent:
 
         facet_cache_hit = False
         maturity = "totally_raw"
-        maturity_from_cache = False
         segments: list[str] = []
 
         # ── Cowork guidance path: use methodology to guide segment synthesis ──
@@ -1065,43 +1064,14 @@ class CustomerSegmentationAgent:
                 "facet_cache_hit": facet_cache_hit,
             }
 
-        # ── Step 0: check doc-level facet cache ───────────────────────────
-        # Highest-maturity file (optionally filtered by topic) wins and
-        # provides a maturity hint; segments are always generated per run.
-        if file_ids:
-            with stage_scope("cs_agent_doc_facet_lookup"):
-                try:
-                    from retriever.doc_facet_cache import get_doc_facet_cache
-                    cache = get_doc_facet_cache()
-                    cached_maturity = cache.get_best_maturity(
-                        file_ids, topic_preference="customer segmentation"
-                    )
-                    has_any_entry = any(cache.get(fid) is not None for fid in file_ids)
-                    if has_any_entry:
-                        maturity_from_cache = True
-                        facet_cache_hit = True
-                        maturity = cached_maturity
-                        logger.info(
-                            "CS agent: doc facet cache hit module=%s maturity=%s",
-                            module,
-                            maturity,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "CS agent: doc facet cache lookup failed module=%s err=%s; falling back to LLM classify",
-                        module,
-                        exc,
-                    )
-
         # ── Steps 1 + 2: classify + segment names ──────────────────────────
-        if not maturity_from_cache:
-            # Retrieve a broad sample sufficient for maturity classification.
-            classify_content = self._retrieve_context(
-                file_ids,
-                "HCP customer segmentation analysis segment names maturity",
-                module=module,
-            )
-            maturity = self._classify(classify_content, module)
+        # Doc facet removed; maturity always derived via classify.
+        classify_content = self._retrieve_context(
+            file_ids,
+            "HCP customer segmentation analysis segment names maturity",
+            module=module,
+        )
+        maturity = self._classify(classify_content, module)
 
         if maturity == "mature":
             if not _use_full_context_when_fits():

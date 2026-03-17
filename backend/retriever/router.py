@@ -1,8 +1,6 @@
 """FastAPI router for the retriever service."""
 
-import asyncio
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -10,8 +8,8 @@ from pydantic import BaseModel
 
 from retriever.chunker import bm25_retrieve_records
 from retriever.converter import convert_to_markdown
-from retriever.index_store import EmbeddingIndexStore
 from retriever.models import ChunkRecord
+from retriever.vector_store import SentenceTransformerStore
 from retriever.parsers.docx_parser import parse_docx_bytes
 from retriever.parsers.md_parser import parse_markdown_text
 from retriever.parsers.pptx_parser import parse_pptx_bytes
@@ -19,40 +17,15 @@ from retriever.parsers.pptx_parser import parse_pptx_bytes
 router = APIRouter(prefix="/retriever", tags=["retriever"])
 logger = __import__("logging").getLogger("retriever")
 
-_doc_facet_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="doc_facet")
-
-
-def _schedule_doc_facet(file_id: str, md_text: str, filename: str) -> None:
-    """Submit doc-level facet extraction to a background thread pool."""
-    def _run() -> None:
-        try:
-            from retriever.doc_facet_extractor import extract_document_facet
-            from retriever.doc_facet_cache import get_doc_facet_cache
-            facet = extract_document_facet(file_id, md_text, filename)
-            get_doc_facet_cache().set(file_id, facet)
-            logger.info(
-                "Doc facet stored file_id=%s filename=%s maturity=%s topic=%s summary=%s",
-                file_id,
-                filename,
-                facet.get("maturity"),
-                facet.get("topic"),
-                (facet.get("summary") or "")[:80],
-            )
-        except Exception as exc:
-            logger.warning(
-                "Doc facet background task failed file_id=%s filename=%s err=%s",
-                file_id,
-                filename,
-                exc,
-            )
-
-    _doc_facet_executor.submit(_run)
-
 # In-memory stores: file_id -> full markdown text / list of chunks
 _store: dict[str, str] = {}
 _chunk_store: dict[str, list[ChunkRecord]] = {}
 _doc_meta_store: dict[str, dict[str, Any]] = {}
-_embedding_store = EmbeddingIndexStore()
+try:
+    _embedding_store = SentenceTransformerStore()
+except Exception:
+    from retriever.index_store import EmbeddingIndexStore
+    _embedding_store = EmbeddingIndexStore()
 
 
 class SearchRequest(BaseModel):
@@ -100,12 +73,6 @@ async def ingest(files: list[UploadFile] = File(...)) -> dict[str, Any]:
             _embedding_store.upsert_chunks(chunks)
             result["file_ids"].append(file_id)
             logger.info("Ingested %s as %s (%d chunks)", file.filename, file_id, len(chunks))
-
-            # Kick off doc-level facet extraction in the background so it does
-            # not block the ingest response.  The facet card is stored in the
-            # DocumentFacetCache and will be available by the time the user
-            # triggers generation.
-            _schedule_doc_facet(file_id, md_text, file.filename)
         except Exception as e:
             logger.exception("Failed to ingest %s: %s", file.filename, e)
             result["errors"].append({"file": file.filename, "error": str(e)})

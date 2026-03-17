@@ -225,9 +225,9 @@ def run_fill(
                         "CS agent: using cowork methodology guidance module=%s",
                         module,
                     )
-                if get_segment_names(module) is not None and not use_cowork:
-                    # Cache hit: reuse segments, fall through to standard path.
-                    segment_names = get_segment_names(module)
+                if get_segment_names(module, slide_idx) is not None and not use_cowork:
+                    # Cache hit: reuse segments (only valid for slide_idx > cached slide).
+                    segment_names = get_segment_names(module, slide_idx)
                     logger.info(
                         "CS agent: reusing cached segment names module=%s names=%s",
                         module,
@@ -261,7 +261,7 @@ def run_fill(
                     )
                     segment_names = agent_result["segment_names"]
                     table_data = agent_result["table_data"]
-                    set_segment_names(module, segment_names)
+                    set_segment_names(module, segment_names, slide_idx)
                     logger.info(
                         "CS agent: done module=%s maturity=%s facet_cache_hit=%s segments=%s rows=%d",
                         module,
@@ -305,8 +305,8 @@ def run_fill(
         # ── Standard segment name resolution (non-CS or CS cache hit) ─────────
         if has_placeholder_columns(placeholder_cols) and not is_ms_slide3:
             with stage_scope("segment_name_resolution"):
-                if get_segment_names(module) is not None:
-                    segment_names = get_segment_names(module)
+                if get_segment_names(module, slide_idx) is not None:
+                    segment_names = get_segment_names(module, slide_idx)
                     logger.info(
                         "Reusing cached segment names for module=%s: %s",
                         module,
@@ -325,7 +325,7 @@ def run_fill(
                         module,
                         trace_writer=write_segment_header_trace,
                     )
-                    set_segment_names(module, segment_names)
+                    set_segment_names(module, segment_names, slide_idx)
                     logger.info(
                         "Extracted and cached segment names for module=%s: %s",
                         module,
