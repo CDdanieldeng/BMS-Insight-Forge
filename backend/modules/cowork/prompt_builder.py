@@ -24,8 +24,7 @@ _PHASE_GUIDANCE: dict[ConversationPhase, str] = {
     ),
     ConversationPhase.REFINEMENT: (
         "The user has chosen ONE dimension. Accept it — do NOT suggest layering or adding "
-        "secondary lenses (e.g. if they chose city tier, do not propose prescribing velocity or "
-        "attitude toward oral regimens on top). Refine the chosen dimension only: sharpen "
+        "secondary lenses. Refine the chosen dimension only: sharpen "
         "identification criteria and data signals for that dimension. "
         "Propose illustrative segment archetypes if it helps — but treat them as examples, not "
         "final names. Advance when the approach and identification criteria are reasonably agreed — "
@@ -64,10 +63,8 @@ PERSONA
 
 SEGMENTATION PRINCIPLES YOU APPLY THROUGHOUT
 - ONE DIMENSION ONLY: Segmentation uses exactly ONE primary dimension — no layering or combining.
-  If the user chooses city tier, we segment by city tier only. If they choose prescribing velocity,
-  we segment by prescribing velocity only. Never suggest adding a second dimension.
-- Dimension types include: demographic (city tier, department, hospital level) and behavioral/attitudinal
-  (prescribing velocity, attitude toward oral regimens, patient-type focus). All are valid.
+  Whatever dimension the user chooses, we segment by that ONE dimension only. Never suggest adding a second dimension.
+- Dimension types include demographic and behavioral/attitudinal options — all are valid as single dimensions.
 - Segmentation must be actionable and commercially meaningful.
 - Practical output: 3–5 HCP segments identified from research data.
 - The methodology — not the conversation — determines the final segment names; your role is to agree the approach
@@ -236,16 +233,18 @@ hesitant to prescribe it, have low prescribing velocity, or whose patient mix
 influences their receptivity to new therapies.]
 
 Segmentation Lens (include only if agreed — ONE dimension only)
-1. [The single agreed dimension; e.g. City tier, or Prescribing velocity, or Attitude toward oral regimens]
+1. [The single agreed dimension]
 (Omit the entire "Segmentation Lens" section if no lens was agreed. List exactly ONE dimension — no layering.)
 
 Segmentation Guideline
-1. [First guideline — what to look for, how to differentiate, or constraint; e.g. by city tier]
-2. [Second guideline; e.g. by department]
-3. [Third guideline]
+(CRITICAL: ONE dimension only. Guidelines must be strictly scoped to the agreed lens — describe \
+only how to identify/classify by that dimension. Do NOT add guidelines for other dimensions. \
+The Business Objective may mention broader goals; the guideline describes only how to apply the lens.)
+1. [First guideline — criteria for the agreed lens only]
+2. [Optional second guideline — only if it elaborates the SAME dimension; omit if one suffices]
 ...
-(Include 1 or more guidelines — identification criteria, data signals, search rules, \
-or constraints the agent must follow when scanning research materials.)
+(Include 1 or more guidelines — all must elaborate the agreed lens. Identification criteria, data \
+signals, or constraints the agent must follow when scanning research materials for that dimension.)
 """
 
 _SUMMARY_USER = """\
@@ -265,7 +264,8 @@ described in the system prompt:
 - Business Objective (required): clear commercial goal
 - Segmentation Lens (optional): numbered list only if a lens was agreed
 - Segmentation Guideline (required): numbered list of what to look for and how to \
-differentiate HCPs in the research materials
+classify HCPs. ONE dimension only — ALL guidelines must stay within the agreed lens. \
+Do NOT add criteria for other dimensions.
 
 Candidate segment directions (if any) are working archetypes for guidance only; \
 the downstream agent must confirm the final segment names against the actual data.
