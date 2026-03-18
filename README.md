@@ -46,3 +46,10 @@ A GenAI-powered webapp that fills business plan slide decks. Uses AI to populate
    ```
 
 4. Open http://localhost:8501
+
+
+5. From VM
+   ```bash
+   uvicorn main:app --host 0.0.0.0 --port 8001
+   streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+   ```

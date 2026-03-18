@@ -971,57 +971,42 @@ class CustomerSegmentationAgent:
             facet_cache_hit = True
             maturity = "cowork_guided"
 
-            # When CS_USE_FULL_CONTEXT_WHEN_FITS=true: try full markdown first; switch to
-            # retriever only when tokens exceed budget. When false: always use retriever.
-            if not _use_full_context_when_fits():
-                synth_content = self._retrieve_context(
-                    file_ids,
-                    "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
-                    module=module,
-                )
-            else:
-                from generation.context_provider import get_full_markdown_context
+            from generation.context_provider import get_full_markdown_context
+            from segment_retriever import retrieve
 
-                synth_content = get_full_markdown_context(file_ids)
-                if not synth_content or not synth_content.strip():
-                    logger.warning(
-                        "CS agent: get_full_markdown_context returned empty, falling back to retrieval file_ids=%s",
-                        file_ids,
-                    )
-                    synth_content = self._retrieve_context(
-                        file_ids,
-                        "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
-                        module=module,
-                    )
-                rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
-                    methodology=methodology.strip(),
-                    min_segments=MIN_SEGMENTS,
-                    n_segments=n_segments,
+            raw_content = get_full_markdown_context(file_ids)
+            synth_content = retrieve(
+                methodology=methodology,
+                content=raw_content or "",
+                max_context_chars=12000,
+                top_k=25,
+            )
+            if not synth_content or not synth_content.strip():
+                synth_content = raw_content or ""
+                logger.warning(
+                    "CS agent: segment_retriever returned empty, using full markdown context file_ids=%s",
+                    file_ids,
                 )
-                rendered_user = _SYNTHESIZE_WITH_METHODOLOGY_USER.format(
+            rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
+                methodology=methodology.strip(),
+                min_segments=MIN_SEGMENTS,
+                n_segments=n_segments,
+            )
+            rendered_user = _SYNTHESIZE_WITH_METHODOLOGY_USER.format(
+                content=synth_content,
+                n_segments=n_segments,
+                min_segments=MIN_SEGMENTS,
+            )
+            if self._would_exceed_segment_prompt_budget(rendered_system, rendered_user):
+                synth_content = self._truncate_content_for_budget(
                     content=synth_content,
-                    n_segments=n_segments,
-                    min_segments=MIN_SEGMENTS,
+                    system_prompt=rendered_system,
+                    user_template=_SYNTHESIZE_WITH_METHODOLOGY_USER,
+                    user_template_args={
+                        "n_segments": n_segments,
+                        "min_segments": MIN_SEGMENTS,
+                    },
                 )
-                if self._would_exceed_segment_prompt_budget(rendered_system, rendered_user):
-                    logger.warning(
-                        "CS agent: methodology synthesis prompt too large; switching to retrieval context file_ids=%s",
-                        file_ids,
-                    )
-                    synth_content = self._retrieve_context(
-                        file_ids,
-                        "HCP physician prescriber behaviors attitudes barriers drivers treatment patterns segmentation",
-                        module=module,
-                    )
-                    synth_content = self._truncate_content_for_budget(
-                        content=synth_content,
-                        system_prompt=rendered_system,
-                        user_template=_SYNTHESIZE_WITH_METHODOLOGY_USER,
-                        user_template_args={
-                            "n_segments": n_segments,
-                            "min_segments": MIN_SEGMENTS,
-                        },
-                    )
 
             segments = self._synthesize_with_methodology(
                 synth_content, n_segments, module, methodology

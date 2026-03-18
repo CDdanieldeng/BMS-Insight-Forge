@@ -24,10 +24,12 @@ _PHASE_GUIDANCE: dict[ConversationPhase, str] = {
     ),
     ConversationPhase.REFINEMENT: (
         "The user has chosen ONE dimension. Accept it — do NOT suggest layering or adding "
-        "secondary lenses. Refine the chosen dimension only: sharpen "
-        "identification criteria and data signals for that dimension. "
-        "Propose illustrative segment archetypes if it helps — but treat them as examples, not "
-        "final names. Advance when the approach and identification criteria are reasonably agreed — "
+        "secondary lenses. Refine the chosen dimension only: sharpen identification criteria and "
+        "data signals for that dimension alone. Do NOT use 'supporting indicators' or auxiliary "
+        "factors from other dimensions (e.g., prescribing volume, specialty care, patient mix) to "
+        "'refine' the classification — stay strictly within the agreed lens. "
+        "Propose illustrative segment archetypes if it helps — treat them as examples, not final names. "
+        "Advance when the approach and identification criteria are reasonably agreed — "
         "exact segment names will be confirmed against the actual research data."
     ),
     ConversationPhase.CONVERGENCE: (
@@ -85,9 +87,10 @@ You are guiding the conversation through a natural arc. Calibrate your behavior 
 
   Phase 3 — refinement
     The user has chosen ONE dimension. Accept it. Refine only that dimension — sharpen identification
-    criteria and data signals. Do NOT suggest layering or adding secondary lenses.
-    Use illustrative segment archetypes if it helps — treat them as examples, not final names. Final
-    names come from the data.
+    criteria and data signals for that dimension alone. Do NOT use factors from other dimensions
+    (e.g., prescribing volume, specialty care) as 'supporting indicators'. Stay strictly within the
+    agreed lens. Use illustrative segment archetypes if it helps — treat them as examples, not final
+    names. Final names come from the data.
 
   Phase 4 — convergence
     Summarize the agreed methodology: objective, lens, rationale, identification criteria,
@@ -239,8 +242,13 @@ Segmentation Lens (include only if agreed — ONE dimension only)
 Segmentation Guideline
 (CRITICAL: ONE dimension only. Guidelines must be strictly scoped to the agreed lens — describe \
 only how to identify/classify by that dimension. Do NOT add guidelines for other dimensions. \
-The Business Objective may mention broader goals; the guideline describes only how to apply the lens.)
-1. [First guideline — criteria for the agreed lens only]
+Do NOT use 'supporting indicators', 'refining factors', or auxiliary criteria from other dimensions \
+(e.g., prescribing volume, specialty care access, patient mix, behavioral data) to 'refine' or \
+'elaborate' the classification. If the lens is city tier, describe ONLY geographic/urbanization \
+criteria — no prescribing, no access metrics, no behavioral factors. Each guideline must be a \
+direct criterion for the agreed lens, nothing else. The Business Objective may mention broader goals; \
+the guideline describes only how to apply the lens.)
+1. [First guideline — direct criteria for the agreed lens only]
 2. [Optional second guideline — only if it elaborates the SAME dimension; omit if one suffices]
 ...
 (Include 1 or more guidelines — all must elaborate the agreed lens. Identification criteria, data \
@@ -265,7 +273,9 @@ described in the system prompt:
 - Segmentation Lens (optional): numbered list only if a lens was agreed
 - Segmentation Guideline (required): numbered list of what to look for and how to \
 classify HCPs. ONE dimension only — ALL guidelines must stay within the agreed lens. \
-Do NOT add criteria for other dimensions.
+Do NOT add criteria for other dimensions. Do NOT use 'supporting indicators' or \
+'refining factors' from other dimensions — e.g. if the lens is city tier, prescribing \
+volume and specialty care access must NOT appear in the guidelines.
 
 Candidate segment directions (if any) are working archetypes for guidance only; \
 the downstream agent must confirm the final segment names against the actual data.
