@@ -7,6 +7,7 @@ overlap, and splitting logic for optimal retrieval.
 
 from __future__ import annotations
 
+import re
 from abc import ABC
 from dataclasses import dataclass
 from typing import Any
@@ -106,13 +107,85 @@ class BaseChunker(ABC):
 
 
 class TranscriptChunker(BaseChunker):
-    """Chunker for interview/meeting transcripts."""
+    """
+    Chunker for interview/meeting transcripts.
+
+    Splits by Q&A pairs. Supports Chinese and English formats:
+
+    Chinese:
+        问题Q1. ...
+        答案：
+    English:
+        Question 1. ...  /  Q1. ...
+        Answer:
+        ...
+
+    Each chunk is one complete Q&A pair (question + answer).
+    Falls back to separator-based chunking when no Q&A structure is detected.
+    """
+
+    # Regex: 问题Qn (Chinese) | Question n (English) | Qn (English)
+    _QA_PATTERN = re.compile(
+        r"问题Q\s*\d+|Question\s*\d+|\bQ\s*\d+",
+        re.IGNORECASE,
+    )
 
     config = ChunkConfig(
         chunk_size=800,
         chunk_overlap=100,
         separator="\n\n",
     )
+
+    def chunk(
+        self,
+        text: str,
+        facet: DocumentFacet,
+        config_override: ChunkConfig | None = None,
+    ) -> list[dict[str, Any]]:
+        """Split transcript by Q&A pairs; fall back to base chunking if no Q&A structure."""
+        return self._chunk_by_qa_pairs(text, facet, config_override)
+
+    def _chunk_by_qa_pairs(
+        self,
+        text: str,
+        facet: DocumentFacet,
+        config_override: ChunkConfig | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Split transcript into chunks by Q&A pairs.
+        Each chunk = one Q&A block (问题Qn/Question n/Qn ... 答案：/Answer: ...).
+        Falls back to _chunk_by_separator when no Q&A pattern is found.
+        """
+        matches = list(self._QA_PATTERN.finditer(text))
+        if not matches:
+            cfg = config_override or self.config
+            return self._chunk_by_separator(text, facet, cfg)
+
+        chunks: list[dict[str, Any]] = []
+        for i, m in enumerate(matches):
+            start = m.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            chunk_text_val = text[start:end].strip()
+            if chunk_text_val:
+                chunks.append({
+                    "text": chunk_text_val,
+                    "start": start,
+                    "end": end,
+                    "facet": facet.value,
+                })
+
+        # Preamble before first Q&A marker (if non-empty)
+        if matches and matches[0].start() > 0:
+            preamble = text[: matches[0].start()].strip()
+            if preamble:
+                chunks.insert(0, {
+                    "text": preamble,
+                    "start": 0,
+                    "end": matches[0].start(),
+                    "facet": facet.value,
+                })
+
+        return chunks
 
 
 class SwotChunker(BaseChunker):
@@ -205,3 +278,18 @@ def chunk_text(
         List of chunk dicts with keys like "text", "start", "end", "facet".
     """
     return get_chunker(facet).chunk(text, facet, config)
+
+
+if __name__ == "__main__":
+    # Run: cd backend && python -m retriever.chunking
+    text = """问题Q1. 你的典型客户是谁？
+答案：我们主要服务二线城市的中型医院。
+
+问题Q2. 最大的挑战是什么？
+答案：价格敏感度和竞品对比。"""
+    chunks = chunk_text(text, DocumentFacet.TRANSCRIPT)
+    print(f"Chunks: {len(chunks)}")
+    for i, c in enumerate(chunks):
+        print(f"  {i+1}: {c['text'][:60]}...")
+        print("*"*60)
+

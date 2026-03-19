@@ -150,3 +150,13 @@ if __name__ == "__main__":
     """
     result = classify_document_facet(sample)
     print(result)  
+
+    # Example output:
+    # {
+    #   'file_type': 'transcript',
+    #   'summary': (
+    #     'This document is an interview transcript from a sales call. '
+    #     'The respondent talks about their typical customers, describing them as '
+    #     'mid-sized hospitals located in tier-2 cities.'
+    #   )
+    # }
