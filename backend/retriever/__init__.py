@@ -44,9 +44,11 @@ from .facet import (
 # Chunking
 # ---------------------------------------------------------------------------
 from .chunking import (
+    BaseChunker,
     ChunkConfig,
     FACET_CHUNK_CONFIGS,
     chunk_text,
+    get_chunker,
     get_chunking_strategy,
 )
 
@@ -75,10 +77,12 @@ __all__ = [
     "FacetExtractionResult",
     "classify_document_facet",
     # Chunking
+    "BaseChunker",
     "ChunkConfig",
     "FACET_CHUNK_CONFIGS",
-    "get_chunking_strategy",
     "chunk_text",
+    "get_chunker",
+    "get_chunking_strategy",
     # Embedding
     "embed",
     "embed_single",
