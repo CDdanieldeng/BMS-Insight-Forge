@@ -66,7 +66,13 @@ from .embedding import (
 # ---------------------------------------------------------------------------
 # Recall
 # ---------------------------------------------------------------------------
-from .recall import recall, recall_by_query_text
+from .recall import (
+    BaseRecaller,
+    CosineSimilarityRecaller,
+    get_default_recaller,
+    recall,
+    recall_by_query_text,
+)
 
 # ---------------------------------------------------------------------------
 # Rerank
@@ -96,6 +102,9 @@ __all__ = [
     "embed_single",
     "get_default_embedder",
     # Recall
+    "BaseRecaller",
+    "CosineSimilarityRecaller",
+    "get_default_recaller",
     "recall",
     "recall_by_query_text",
     # Rerank
