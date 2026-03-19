@@ -114,3 +114,11 @@ def embed_single(text: str, model: str | None = None) -> list[float]:
         Embedding vector as list of floats.
     """
     return _default_embedder.embed_single(text, model=model)
+
+
+if __name__ == "__main__":
+    # cd backend && python -m retriever.embedding
+    embedder = SentenceTransformerEmbedder()
+    vecs = embedder.embed(["Hello world", "Semantic search test"])
+    assert len(vecs) == 2 and len(vecs[0]) == embedder.dimension
+    print("embedding test passed")
