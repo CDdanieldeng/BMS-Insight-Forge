@@ -36,6 +36,7 @@ from __future__ import annotations
 from .facet import (
     DocumentFacet,
     FACET_VALUES,
+    FacetExtractionResult,
     classify_document_facet,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     # Facet
     "DocumentFacet",
     "FACET_VALUES",
+    "FacetExtractionResult",
     "classify_document_facet",
     # Chunking
     "ChunkConfig",
