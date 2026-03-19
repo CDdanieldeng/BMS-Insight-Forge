@@ -83,6 +83,7 @@ def classify_document_facet(
             max_tokens=512,
             provider_override="qwen",
             model_override="qwen-turbo",
+            response_format={"type": "json_object"},
         )
         # Handle markdown code blocks if present
         text = raw.strip()

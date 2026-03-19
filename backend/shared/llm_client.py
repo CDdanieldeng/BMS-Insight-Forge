@@ -107,6 +107,7 @@ def complete(
     max_tokens: int | None = None,
     provider_override: str | None = None,
     model_override: str | None = None,
+    response_format: dict[str, str] | None = None,
 ) -> str:
     """
     Call LLM with system and user prompts, return assistant message content.
@@ -138,6 +139,8 @@ def complete(
     }
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if response_format is not None:
+        kwargs["response_format"] = response_format
 
     try:
         response = client.chat.completions.create(**kwargs)
