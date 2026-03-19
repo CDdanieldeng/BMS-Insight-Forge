@@ -7,10 +7,17 @@ Used to select appropriate chunking and retrieval strategies per document.
 from __future__ import annotations
 
 import json
+import logging
 from enum import Enum
 from typing import TypedDict
 
 from shared.llm_client import complete
+
+logger = logging.getLogger(__name__)
+
+from dotenv import load_dotenv
+from pathlib import Path
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 
 class DocumentFacet(str, Enum):
@@ -46,6 +53,11 @@ def _truncate_to_first_pages(content: str, n_pages: int = _NUM_PAGES_FOR_FACET) 
     max_chars = n_pages * _CHARS_PER_PAGE
     if len(content) <= max_chars:
         return content
+    logger.debug(
+        "Truncated content for facet extraction orig_len=%d max_chars=%d",
+        len(content),
+        max_chars,
+    )
     return content[:max_chars]
 
 
@@ -66,6 +78,12 @@ def classify_document_facet(
         Dict with "file_type" (e.g. "transcript") and "summary" (brief summary).
     """
     truncated = _truncate_to_first_pages(content)
+    logger.info(
+        "Classifying document facet filename=%s content_chars=%d truncated_chars=%d",
+        filename or "(unnamed)",
+        len(content),
+        len(truncated),
+    )
     facet_list = ", ".join(FACET_VALUES)
 
     system_prompt = (
@@ -99,7 +117,36 @@ def classify_document_facet(
         summary = str(parsed.get("summary", "")).strip()
         # Normalize to known facet
         if file_type not in FACET_VALUES:
+            logger.warning(
+                "Unknown file_type from LLM, normalizing to others file_type=%s filename=%s",
+                file_type,
+                filename or "(unnamed)",
+            )
             file_type = "others"
-        return {"file_type": file_type, "summary": summary}
+        result = {"file_type": file_type, "summary": summary}
+        logger.info(
+            "Facet extraction complete file_type=%s summary_len=%d filename=%s",
+            file_type,
+            len(summary),
+            filename or "(unnamed)",
+        )
+        return result
     except (json.JSONDecodeError, KeyError) as e:
+        logger.warning(
+            "Facet extraction failed, falling back to others filename=%s err=%s",
+            filename or "(unnamed)",
+            e,
+        )
         return {"file_type": "others", "summary": f"(extraction failed: {e})"}
+
+
+
+if __name__ == "__main__":
+    sample = """
+    Interview Transcript - Sales Call
+    ---
+    Moderator: Can you describe your typical customer?
+    Respondent: We focus on mid-sized hospitals in tier-2 cities...
+    """
+    result = classify_document_facet(sample)
+    print(result)  
