@@ -80,6 +80,15 @@ from .recall import (
 from .rerank import rerank
 
 # ---------------------------------------------------------------------------
+# Query rewrite
+# ---------------------------------------------------------------------------
+from .query_rewrite import (
+    QWEN_TURBO,
+    rewrite_for_retrieval,
+    rewrite_segment_guidance,
+)
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 __all__ = [
@@ -109,4 +118,8 @@ __all__ = [
     "recall_by_query_text",
     # Rerank
     "rerank",
+    # Query rewrite
+    "QWEN_TURBO",
+    "rewrite_for_retrieval",
+    "rewrite_segment_guidance",
 ]

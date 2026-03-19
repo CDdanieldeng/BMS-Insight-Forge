@@ -1,18 +1,22 @@
 """
-Integration test for retriever pipeline: facet classification, chunking, and embedding.
+Integration test for retriever pipeline: facet, chunking, embedding, recall, and rerank.
 
 Pipelines:
   1. facet.classify_document_facet(text) → {file_type, summary}
   2. chunking.chunk_text(text, facet) → chunks
   3. embedding.embed(chunk texts) → vectors
+  4. recall.recall(query_embedding, ...) → candidate chunks
+  5. rerank.rerank(query, candidates, top_k) → reordered chunks
 
 Mocks:
   - LLM call in facet (shared.llm_client.complete) to avoid API usage
   - Embedder to avoid loading sentence-transformers model
+  - DashScope API in rerank to avoid external calls
 """
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -27,7 +31,10 @@ from retriever import (
     chunk_text,
     classify_document_facet,
     embed,
+    recall,
+    rerank,
 )
+from retriever.recall import CosineSimilarityRecaller, get_default_recaller
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +303,174 @@ class TestRetrieverPipeline(unittest.TestCase):
                 chunks=chunks,
                 vectors=vectors,
             )
+
+
+# ---------------------------------------------------------------------------
+# Recall tests
+# ---------------------------------------------------------------------------
+
+class TestRecall(unittest.TestCase):
+    """Test recall: index chunks + embeddings, retrieve by query similarity."""
+
+    def test_recall_top_k_by_cosine_similarity(self) -> None:
+        """CosineSimilarityRecaller returns top-k chunks by similarity score."""
+        # Synthetic vectors: [1,0,0..] and [0.9,0.1,0..] are similar; [0,1,0..] is not.
+        dim = 384
+        chunks = [
+            {"text": "chunk A (battery)", "file_id": "f1", "facet": "technical"},
+            {"text": "chunk B (weather)", "file_id": "f2", "facet": "news"},
+            {"text": "chunk C (EV battery)", "file_id": "f1", "facet": "technical"},
+        ]
+        embeddings = [
+            [1.0] + [0.0] * (dim - 1),
+            [0.0, 1.0] + [0.0] * (dim - 2),
+            [0.9] + [0.1] + [0.0] * (dim - 2),
+        ]
+        query_vec = [1.0] + [0.0] * (dim - 1)
+
+        recaller = CosineSimilarityRecaller()
+        recaller.index(chunks, embeddings)
+
+        results = recaller.recall(query_vec, top_k=2)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all("score" in r for r in results))
+        self.assertGreaterEqual(results[0]["score"], results[1]["score"])
+        self.assertGreater(results[0]["score"], 0.5)
+        # Chunk A and C should be retrieved (both similar to query)
+        texts = [r["text"] for r in results]
+        self.assertIn("chunk A (battery)", texts)
+        self.assertIn("chunk C (EV battery)", texts)
+
+    def test_recall_filter_by_file_ids(self) -> None:
+        """Recall respects file_ids filter."""
+        dim = 384
+        chunks = [
+            {"text": "chunk A", "file_id": "f1"},
+            {"text": "chunk B", "file_id": "f2"},
+            {"text": "chunk C", "file_id": "f1"},
+        ]
+        embeddings = _mock_embed([c["text"] for c in chunks])
+
+        recaller = CosineSimilarityRecaller()
+        recaller.index(chunks, embeddings)
+        query_vec = embeddings[0]  # same as chunk A
+
+        results = recaller.recall(query_vec, file_ids=["f1"], top_k=5)
+        self.assertTrue(all(r.get("file_id") == "f1" for r in results))
+        self.assertEqual(len(results), 2)  # only f1 chunks
+
+    def test_recall_filter_by_facet(self) -> None:
+        """Recall respects facet filter."""
+        dim = 384
+        chunks = [
+            {"text": "technical chunk", "file_id": "f1", "facet": "technical"},
+            {"text": "news chunk", "file_id": "f2", "facet": "news"},
+            {"text": "another technical", "file_id": "f1", "facet": "technical"},
+        ]
+        embeddings = _mock_embed([c["text"] for c in chunks])
+
+        recaller = CosineSimilarityRecaller()
+        recaller.index(chunks, embeddings)
+        query_vec = embeddings[0]
+
+        results = recaller.recall(query_vec, facet="technical", top_k=5)
+        self.assertTrue(all(r.get("facet") == "technical" for r in results))
+        self.assertEqual(len(results), 2)
+
+    def test_recall_via_module_with_mocked_embedder(self) -> None:
+        """recall() and recall_by_query_text via default recaller (needs index)."""
+        from retriever.recall import recall_by_query_text
+
+        chunks = [
+            {"text": "Battery management for EVs", "file_id": "f1", "facet": "technical"},
+            {"text": "Weather report", "file_id": "f2", "facet": "news"},
+        ]
+        embeddings = _mock_embed([c["text"] for c in chunks])
+
+        recaller = get_default_recaller()
+        recaller.clear()
+        recaller.index(chunks, embeddings)
+
+        with patch("retriever.embedding._default_embedder") as mock_emb:
+            mock_emb.embed.side_effect = _mock_embed
+            results = recall_by_query_text("electric vehicle battery", top_k=2)
+
+        self.assertLessEqual(len(results), 2)
+        self.assertTrue(all("score" in r for r in results))
+        recaller.clear()
+
+
+# ---------------------------------------------------------------------------
+# Rerank tests
+# ---------------------------------------------------------------------------
+
+class TestRerank(unittest.TestCase):
+    """Test rerank: score and reorder recall candidates (mocked DashScope API)."""
+
+    def test_rerank_empty_candidates(self) -> None:
+        """Rerank with empty candidates returns []."""
+        result = rerank("query", [], top_k=5)
+        self.assertEqual(result, [])
+
+    def test_rerank_fallback_no_api_key(self) -> None:
+        """Rerank falls back to candidates[:top_k] when API key is missing."""
+        with patch.dict("os.environ", {}, clear=False):
+            # Ensure no key in env
+            orig_dash = os.environ.get("DASHSCOPE_API_KEY")
+            orig_qwen = os.environ.get("QWEN_API_KEY")
+            try:
+                if "DASHSCOPE_API_KEY" in os.environ:
+                    del os.environ["DASHSCOPE_API_KEY"]
+                if "QWEN_API_KEY" in os.environ:
+                    del os.environ["QWEN_API_KEY"]
+                candidates = [
+                    {"text": "doc 1", "file_id": "f1"},
+                    {"text": "doc 2", "file_id": "f1"},
+                    {"text": "doc 3", "file_id": "f2"},
+                ]
+                result = rerank("query", candidates, top_k=2)
+                self.assertEqual(len(result), 2)
+                self.assertEqual(result[0]["text"], "doc 1")
+                self.assertEqual(result[1]["text"], "doc 2")
+            finally:
+                if orig_dash is not None:
+                    os.environ["DASHSCOPE_API_KEY"] = orig_dash
+                if orig_qwen is not None:
+                    os.environ["QWEN_API_KEY"] = orig_qwen
+
+    @patch("retriever.rerank.dashscope.TextReRank.call")
+    def test_rerank_with_mocked_api(self, mock_call: MagicMock) -> None:
+        """Rerank returns reordered candidates with rerank_score when API succeeds."""
+        import os
+        from http import HTTPStatus
+
+        # Ensure we don't hit "no api key" path
+        with patch.dict("os.environ", {"DASHSCOPE_API_KEY": "test-key"}, clear=False):
+            candidates = [
+                {"text": "文本排序模型用于搜索引擎", "file_id": "f1"},
+                {"text": "量子计算是前沿领域", "file_id": "f2"},
+                {"text": "预训练语言模型与文本排序", "file_id": "f1"},
+            ]
+            query = "什么是文本排序模型"
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = HTTPStatus.OK
+            # API returns top_n=top_k results; with top_k=2 we get 2 results
+            mock_resp.output = {
+                "results": [
+                    {"index": 2, "relevance_score": 0.95},
+                    {"index": 0, "relevance_score": 0.85},
+                ]
+            }
+            mock_call.return_value = mock_resp
+
+            result = rerank(query, candidates, top_k=2)
+
+            self.assertEqual(len(result), 2)
+            self.assertTrue(all("rerank_score" in r for r in result))
+            self.assertGreaterEqual(result[0]["rerank_score"], result[1]["rerank_score"])
+            self.assertEqual(result[0]["text"], "预训练语言模型与文本排序")
+            self.assertEqual(result[1]["text"], "文本排序模型用于搜索引擎")
 
 
 if __name__ == "__main__":
