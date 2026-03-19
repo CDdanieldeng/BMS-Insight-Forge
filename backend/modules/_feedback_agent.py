@@ -8,7 +8,6 @@ from shared.logging_config import setup_logging
 
 from shared.llm_client import complete
 from generation.context_provider import get_context_content
-from retriever.query_enhancer import enhance_query
 from modules._slide_registry import get_prompt_builder
 from generation.stage_metrics import run_scope, stage_scope
 
@@ -161,8 +160,7 @@ def _apply_feedback_inner(
         )
 
     if need_uploaded_context and file_ids:
-        # enhance_query uses stage_scope("query_enhancement") internally
-        query = f"{enhance_query(module, table_structure)}; user feedback: {user_message}".strip("; ")
+        query = f"user feedback: {user_message}"
         context = get_context_content(
             file_ids,
             query=query,
@@ -400,8 +398,7 @@ def _answer_question_inner(  # decay: ask mode scheduled for removal
         while len(existing_headers) < current_width:
             existing_headers.append(f"Segment {len(existing_headers) + 1}")
 
-    # enhance_query uses stage_scope("query_enhancement") internally
-    query = f"{enhance_query(module, table_structure)}; user question: {user_message}".strip("; ")
+    query = f"user question: {user_message}"
     context = (
         get_context_content(
             file_ids,

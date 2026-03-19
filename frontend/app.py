@@ -634,7 +634,7 @@ def _ingest_only(module: str, uploaded_files) -> bool:
     from io import BytesIO
 
     resp = API_SESSION.post(
-        f"{BACKEND_URL}/retriever/ingest",
+        f"{BACKEND_URL}/document/ingest",
         files=[("files", (f.name, BytesIO(f.getvalue()))) for f in uploaded_files],
         timeout=TIMEOUT_INGEST,
     )

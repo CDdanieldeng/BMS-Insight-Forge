@@ -12,7 +12,7 @@ from modules.cowork.models import (
     DirectUploadedDoc,
     WorkflowState,
 )
-from retriever.converter import convert_to_markdown
+from shared.converter import convert_to_markdown
 
 router = APIRouter(prefix="/cowork-agent", tags=["cowork-agent"])
 logger = __import__("logging").getLogger("modules.cowork")

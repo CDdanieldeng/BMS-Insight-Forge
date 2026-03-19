@@ -13,7 +13,6 @@ from shared.logging_config import setup_logging
 from generation.context_provider import (
     get_context_content,
     get_full_markdown_context,
-    use_retriever,
 )
 from generation.module_handlers import (
     is_messaging_strategy_slide3,
@@ -35,7 +34,6 @@ from generation.trace_writer import (
     write_key_answers_trace,
     write_segment_header_trace,
 )
-from retriever.query_enhancer import enhance_query
 from shared.llm_client import complete
 
 logger = setup_logging("generation")
@@ -71,10 +69,9 @@ def generate_key_question_answers(module: str, file_ids: list[str]) -> list[dict
             )
             if not content:
                 logger.info(
-                    "Key answers fallback module=%s reason=no_context_content questions=%d use_retriever=%s",
+                    "Key answers fallback module=%s reason=no_context_content questions=%d",
                     module,
                     len(questions),
-                    use_retriever(),
                 )
                 return [
                     {"question": q, "answer": "No relevant content found in uploaded files."}
@@ -337,27 +334,14 @@ def run_fill(
             effective_table_structure = dict(table_structure)
             effective_table_structure["columns"] = [""] + segment_names
 
-        retriever_enabled = use_retriever()
-        with stage_scope("query_preparation"):
-            if retriever_enabled:
-                query = enhance_query(module, effective_table_structure)
-                logger.info("Enhanced query: %s", query[:100])
-            else:
-                query = ""
-                logger.info("Retriever disabled (USE_RETRIEVER=false), skipping query enhancement")
-
         with stage_scope("context_retrieval"):
             content = get_context_content(
                 file_ids,
-                query,
+                query="",
                 module=module,
                 table_structure=effective_table_structure,
             )
-            logger.info(
-                "Context prepared chars=%d mode=%s",
-                len(content),
-                "retriever" if retriever_enabled else "full_markdown",
-            )
+            logger.info("Context prepared chars=%d", len(content))
 
         # ── Context composition for MS slide 3 / SWOT ─────────────────────────────
         content = merge_context_for_slide(module, slide_idx, indexes, content)

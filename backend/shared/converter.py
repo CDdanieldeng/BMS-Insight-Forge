@@ -7,7 +7,7 @@ from pathlib import Path
 
 from shared.logging_config import setup_logging
 
-logger = setup_logging("retriever")
+logger = setup_logging("shared")
 
 # Lazy import to avoid import error if markitdown not installed
 _markitdown = None

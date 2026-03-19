@@ -47,7 +47,6 @@ _SEGMENT_PROMPT_TOKEN_BUDGET_QWEN = int(
 )
 
 # CS_USE_FULL_CONTEXT_WHEN_FITS: when true, try full markdown when tokens fit;
-# when false, always use retriever (skip full-context optimization).
 def _use_full_context_when_fits() -> bool:
     raw = os.getenv("CS_USE_FULL_CONTEXT_WHEN_FITS", "true")
     return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -567,26 +566,17 @@ class CustomerSegmentationAgent:
         table_structure: dict[str, Any] | None = None,
         module: str = "customer segmentation",
     ) -> str:
-        """Return relevant context for the given query using the evidence pipeline."""
-        from retriever.evidence_pipeline import run_evidence_pipeline
-        from retriever.pipeline_config import load_pipeline_config
+        """Return full markdown context for the given file_ids."""
+        from generation.context_provider import get_full_markdown_context
 
-        config = load_pipeline_config()
-        result = run_evidence_pipeline(
-            file_ids=file_ids,
-            module=module,
-            table_structure=table_structure or {},
-            seed_query=query,
-            config=config,
-        )
+        content = get_full_markdown_context(file_ids)
         logger.info(
-            "CS agent: retrieved context file_ids=%d query_len=%d content_len=%d degraded=%s",
+            "CS agent: retrieved context file_ids=%d query_len=%d content_len=%d",
             len(file_ids),
-            len(query),
-            len(result.context_text),
-            result.degraded,
+            len(query or ""),
+            len(content),
         )
-        return result.context_text
+        return content
 
 
     # ------------------------------------------------------------------
@@ -972,21 +962,8 @@ class CustomerSegmentationAgent:
             maturity = "cowork_guided"
 
             from generation.context_provider import get_full_markdown_context
-            from segment_retriever import retrieve
 
-            raw_content = get_full_markdown_context(file_ids)
-            synth_content = retrieve(
-                methodology=methodology,
-                content=raw_content or "",
-                max_context_chars=12000,
-                top_k=25,
-            )
-            if not synth_content or not synth_content.strip():
-                synth_content = raw_content or ""
-                logger.warning(
-                    "CS agent: segment_retriever returned empty, using full markdown context file_ids=%s",
-                    file_ids,
-                )
+            synth_content = get_full_markdown_context(file_ids)
             rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
                 methodology=methodology.strip(),
                 min_segments=MIN_SEGMENTS,

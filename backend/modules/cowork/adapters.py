@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from retriever.query_enhancer import enhance_query
-
 from modules.cowork.interfaces import (
     DraftingService,
     FilePreparationService,
@@ -44,7 +42,7 @@ class ExistingRetrievalService(RetrievalService):
     ) -> str:
         from generation.context_provider import get_context_content
 
-        query = f"{enhance_query(module, table_structure)}; user ask: {user_message}".strip("; ")
+        query = f"user ask: {user_message}"
         return get_context_content(
             file_ids=file_ids,
             query=query,

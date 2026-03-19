@@ -5,9 +5,8 @@ A GenAI-powered webapp that fills business plan slide decks. Uses AI to populate
 ## Architecture
 
 - **Frontend**: Streamlit (PoC; will be replaced by React for MVP)
-- **Backend**: FastAPI with three logical services:
-  - **Generation** (Orchestrator + LLM): Single gateway, coordinates retriever and fill engine
-  - **Retriever**: Converts pptx/docx to markdown via markitdown; returns text (no embedding for PoC)
+- **Backend**: FastAPI with two logical services:
+  - **Generation** (Orchestrator + LLM): Document ingest, context retrieval, and fill orchestration
   - **Fill Engine**: python-pptx for table structure extraction and filling
 
 ## Quick Start
