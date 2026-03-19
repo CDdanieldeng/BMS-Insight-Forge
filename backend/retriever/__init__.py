@@ -55,7 +55,13 @@ from .chunking import (
 # ---------------------------------------------------------------------------
 # Embedding
 # ---------------------------------------------------------------------------
-from .embedding import embed, embed_single
+from .embedding import (
+    BaseEmbedder,
+    SentenceTransformerEmbedder,
+    embed,
+    embed_single,
+    get_default_embedder,
+)
 
 # ---------------------------------------------------------------------------
 # Recall
@@ -84,8 +90,11 @@ __all__ = [
     "get_chunker",
     "get_chunking_strategy",
     # Embedding
+    "BaseEmbedder",
+    "SentenceTransformerEmbedder",
     "embed",
     "embed_single",
+    "get_default_embedder",
     # Recall
     "recall",
     "recall_by_query_text",
