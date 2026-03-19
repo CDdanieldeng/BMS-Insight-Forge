@@ -248,7 +248,11 @@ Do NOT use 'supporting indicators', 'refining factors', or auxiliary criteria fr
 criteria — no prescribing, no access metrics, no behavioral factors. Each guideline must be a \
 direct criterion for the agreed lens, nothing else. The Business Objective may mention broader goals; \
 the guideline describes only how to apply the lens.)
-1. [First guideline — direct criteria for the agreed lens only]
+(DATA SCOPE: The downstream agent has access ONLY to uploaded research materials. Guidelines must \
+describe what signals, criteria, or attributes to look for WITHIN those uploaded documents. Do NOT \
+mention external data sources, publicly available data, internal market research, or data sourcing \
+— the agent cannot use them. Focus on: what evidence in the documents indicates the classification.)
+1. [First guideline — direct criteria for the agreed lens only; what to look for in the uploaded materials]
 2. [Optional second guideline — only if it elaborates the SAME dimension; omit if one suffices]
 ...
 (Include 1 or more guidelines — all must elaborate the agreed lens. Identification criteria, data \
@@ -272,10 +276,13 @@ described in the system prompt:
 - Business Objective (required): clear commercial goal
 - Segmentation Lens (optional): numbered list only if a lens was agreed
 - Segmentation Guideline (required): numbered list of what to look for and how to \
-classify HCPs. ONE dimension only — ALL guidelines must stay within the agreed lens. \
-Do NOT add criteria for other dimensions. Do NOT use 'supporting indicators' or \
-'refining factors' from other dimensions — e.g. if the lens is city tier, prescribing \
-volume and specialty care access must NOT appear in the guidelines.
+classify HCPs WITHIN the uploaded materials. ONE dimension only — ALL guidelines must \
+stay within the agreed lens. Describe signals/criteria to find IN the documents — \
+do NOT mention external data sources, internal market research, or publicly available \
+data (the agent only has access to uploaded materials). Do NOT add criteria for other \
+dimensions. Do NOT use 'supporting indicators' or 'refining factors' from other \
+dimensions — e.g. if the lens is city tier, prescribing volume and specialty care \
+access must NOT appear in the guidelines.
 
 Candidate segment directions (if any) are working archetypes for guidance only; \
 the downstream agent must confirm the final segment names against the actual data.
