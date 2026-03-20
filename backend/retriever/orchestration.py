@@ -8,6 +8,7 @@ with metadata (recalled_count, reranked_count) for observability.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from shared.logging_config import setup_logging
@@ -80,6 +81,112 @@ def _merge_doc_sources(
     return merged
 
 
+@dataclass
+class IndexedRetrievalCorpus:
+    """
+    Cached outputs of facet → chunk → per-chunk embedding for a document set.
+
+    Reuse for multiple queries (e.g. Customer Segmentation per-cell retrieval)
+    to avoid repeated LLM facet calls and chunk embedding.
+    """
+
+    merged_docs: list[dict[str, Any]]
+    all_chunks: list[dict[str, Any]]
+    chunk_embeddings: list[list[float]]
+    facet_results: list[dict[str, Any]]
+
+
+def _ingest_merged_docs_to_chunks_and_embeddings(
+    merged_docs: list[dict[str, Any]],
+    correlation_key: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[list[float]]]:
+    """
+    Facet (LLM) + chunk + embed all chunks for merged docs.
+
+    Returns:
+        (all_chunks, facet_results, chunk_embeddings). Embeddings list is empty if no chunks.
+    """
+    all_chunks: list[dict[str, Any]] = []
+    facet_results: list[dict[str, Any]] = []
+    for doc in merged_docs:
+        file_id = doc["file_id"]
+        text = doc["text"]
+        filename = doc.get("filename", file_id)
+        if not text or len(text.strip()) < 10:
+            continue
+        facet_result = classify_document_facet(text, filename=filename)
+        raw_facet = facet_result.get("file_type", "others") or "others"
+        summary = facet_result.get("summary", "")
+        topics = facet_result.get("topics") or []
+        facet_results.append({
+            "filename": filename,
+            "file_type": raw_facet,
+            "summary": summary,
+            "topics": topics,
+        })
+        logger.info(
+            "retrieval facet correlation_key=%s filename=%s file_type=%s summary=%s",
+            correlation_key,
+            filename,
+            raw_facet,
+            (summary[:80] + "…") if len(summary) > 80 else summary,
+        )
+        try:
+            facet = DocumentFacet(raw_facet)
+        except ValueError:
+            facet = DocumentFacet.OTHERS
+        chunks = chunk_text(text, facet)
+        for c in chunks:
+            c["file_id"] = file_id
+            c["filename"] = filename
+        all_chunks.extend(chunks)
+
+    if not all_chunks:
+        return [], facet_results, []
+
+    chunk_texts = [c["text"] for c in all_chunks]
+    embeddings = embed(chunk_texts)
+    return all_chunks, facet_results, embeddings
+
+
+def build_indexed_retrieval_corpus(
+    file_ids: list[str],
+    session_upload_docs: list[dict[str, Any]] | None = None,
+    *,
+    correlation_key: str = "",
+) -> IndexedRetrievalCorpus:
+    """
+    Run document merge → facet → chunk → chunk embedding once.
+
+    Safe to pass every ``run_retrieval_pipeline(..., indexed_corpus=corpus)`` for
+    the same file_ids / session uploads.
+    """
+    merged_docs = _merge_doc_sources(file_ids, session_upload_docs, correlation_key)
+    if not merged_docs:
+        return IndexedRetrievalCorpus(
+            merged_docs=[],
+            all_chunks=[],
+            chunk_embeddings=[],
+            facet_results=[],
+        )
+    all_chunks, facet_results, chunk_embeddings = _ingest_merged_docs_to_chunks_and_embeddings(
+        merged_docs, correlation_key
+    )
+    logger.info(
+        "indexed corpus built correlation_key=%s doc_count=%d chunk_count=%d embed_count=%d",
+        correlation_key,
+        len(merged_docs),
+        len(all_chunks),
+        len(chunk_embeddings),
+    )
+    return IndexedRetrievalCorpus(
+        merged_docs=merged_docs,
+        all_chunks=all_chunks,
+        chunk_embeddings=chunk_embeddings,
+        facet_results=facet_results,
+    )
+
+
 def run_retrieval_pipeline(
     raw_query: str,
     file_ids: list[str],
@@ -88,6 +195,7 @@ def run_retrieval_pipeline(
     recall_top_k: int = DEFAULT_RECALL_TOP_K,
     rerank_top_k: int = DEFAULT_RERANK_TOP_K,
     correlation_key: str = "",
+    indexed_corpus: IndexedRetrievalCorpus | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Run full retrieval pipeline: query rewrite → facet → chunk → embed → recall → rerank.
@@ -99,6 +207,8 @@ def run_retrieval_pipeline(
         recall_top_k: Number of candidates from recall.
         rerank_top_k: Number of final chunks after rerank.
         correlation_key: Optional correlation key for logs.
+        indexed_corpus: If set, skip merge/facet/chunk/chunk-embedding and use this
+            pre-built index (e.g. shared across many per-cell queries).
 
     Returns:
         Tuple of (combined_chunk_text, metadata).
@@ -136,69 +246,48 @@ def run_retrieval_pipeline(
         metadata["query_preview"],
     )
 
-    # 2. Merge doc sources
-    merged_docs = _merge_doc_sources(file_ids, session_upload_docs, correlation_key)
-    if not merged_docs:
-        logger.warning(
-            "run_retrieval_pipeline: no documents to chunk correlation_key=%s",
-            correlation_key,
-        )
-        return "", metadata
-
-    # 3. Facet, chunk, embed per document
-    all_chunks: list[dict[str, Any]] = []
-    facet_results: list[dict[str, Any]] = []
-    for doc in merged_docs:
-        file_id = doc["file_id"]
-        text = doc["text"]
-        filename = doc.get("filename", file_id)
-        if not text or len(text.strip()) < 10:
-            continue
-        facet_result = classify_document_facet(text, filename=filename)
-        raw_facet = facet_result.get("file_type", "others") or "others"
-        summary = facet_result.get("summary", "")
-        topics = facet_result.get("topics") or []
-        facet_results.append({
-            "filename": filename,
-            "file_type": raw_facet,
-            "summary": summary,
-            "topics": topics,
-        })
+    # 2–4. Merge + facet + chunk + embed (or use pre-built corpus)
+    if indexed_corpus is not None:
+        merged_docs = indexed_corpus.merged_docs
+        all_chunks = indexed_corpus.all_chunks
+        embeddings = indexed_corpus.chunk_embeddings
+        metadata["facet_results"] = list(indexed_corpus.facet_results)
+        if not merged_docs:
+            logger.warning(
+                "run_retrieval_pipeline: indexed corpus has no documents correlation_key=%s",
+                correlation_key,
+            )
+            return "", metadata
         logger.info(
-            "retrieval facet correlation_key=%s filename=%s file_type=%s summary=%s",
+            "retrieval using indexed_corpus correlation_key=%s doc_count=%d chunk_count=%d",
             correlation_key,
-            filename,
-            raw_facet,
-            (summary[:80] + "…") if len(summary) > 80 else summary,
+            len(merged_docs),
+            len(all_chunks),
         )
-        try:
-            facet = DocumentFacet(raw_facet)
-        except ValueError:
-            facet = DocumentFacet.OTHERS
-        chunks = chunk_text(text, facet)
-        for c in chunks:
-            c["file_id"] = file_id
-            c["filename"] = filename
-        all_chunks.extend(chunks)
-    metadata["facet_results"] = facet_results
-
-    if not all_chunks:
-        logger.warning(
-            "run_retrieval_pipeline: no chunks produced correlation_key=%s",
+    else:
+        merged_docs = _merge_doc_sources(file_ids, session_upload_docs, correlation_key)
+        if not merged_docs:
+            logger.warning(
+                "run_retrieval_pipeline: no documents to chunk correlation_key=%s",
+                correlation_key,
+            )
+            return "", metadata
+        all_chunks, facet_results, embeddings = _ingest_merged_docs_to_chunks_and_embeddings(
+            merged_docs, correlation_key
+        )
+        metadata["facet_results"] = facet_results
+        if not all_chunks:
+            logger.warning(
+                "run_retrieval_pipeline: no chunks produced correlation_key=%s",
+                correlation_key,
+            )
+            return "", metadata
+        logger.info(
+            "retrieval chunking correlation_key=%s doc_count=%d chunk_count=%d",
             correlation_key,
+            len(merged_docs),
+            len(all_chunks),
         )
-        return "", metadata
-
-    logger.info(
-        "retrieval chunking correlation_key=%s doc_count=%d chunk_count=%d",
-        correlation_key,
-        len(merged_docs),
-        len(all_chunks),
-    )
-
-    # 4. Embed
-    chunk_texts = [c["text"] for c in all_chunks]
-    embeddings = embed(chunk_texts)
 
     # 5. Index and recall
     recaller = get_default_recaller()

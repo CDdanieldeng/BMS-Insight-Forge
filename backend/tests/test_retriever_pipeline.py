@@ -622,6 +622,59 @@ class TestOrchestration(unittest.TestCase):
         self.assertIn("reranked_count", meta)
         self.assertLessEqual(meta["reranked_count"], 2)
 
+    @patch("retriever.query_rewrite.complete")
+    @patch("retriever.facet.complete")
+    @patch("retriever.embedding._default_embedder")
+    def test_indexed_corpus_reuses_facet_chunk_embed(
+        self,
+        mock_emb: MagicMock,
+        mock_facet: MagicMock,
+        mock_qw: MagicMock,
+    ) -> None:
+        """Subsequent pipeline runs with indexed_corpus must not call facet LLM again."""
+        from retriever.orchestration import (
+            build_indexed_retrieval_corpus,
+            run_retrieval_pipeline,
+        )
+
+        mock_qw.return_value = "rewritten"
+        mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
+        mock_emb.embed.side_effect = _mock_embed
+
+        session_docs = [
+            {
+                "filename": "a.pdf",
+                "markdown_content": "First paragraph for chunking test content here extra text.",
+            }
+        ]
+        corpus = build_indexed_retrieval_corpus(
+            file_ids=[],
+            session_upload_docs=session_docs,
+            correlation_key="build_once",
+        )
+        self.assertGreater(mock_facet.call_count, 0)
+        mock_facet.reset_mock()
+
+        _, _meta1 = run_retrieval_pipeline(
+            raw_query="first cell query",
+            file_ids=[],
+            session_upload_docs=session_docs,
+            recall_top_k=5,
+            rerank_top_k=2,
+            correlation_key="cell_a",
+            indexed_corpus=corpus,
+        )
+        _, _meta2 = run_retrieval_pipeline(
+            raw_query="second cell query different",
+            file_ids=[],
+            session_upload_docs=session_docs,
+            recall_top_k=5,
+            rerank_top_k=2,
+            correlation_key="cell_b",
+            indexed_corpus=corpus,
+        )
+        mock_facet.assert_not_called()
+
 
 class TestGetRetrievalContextFallback(unittest.TestCase):
     """Test get_retrieval_context fallback to full markdown on empty/error."""

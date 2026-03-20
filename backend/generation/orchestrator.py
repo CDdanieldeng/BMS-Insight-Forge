@@ -207,95 +207,129 @@ def run_fill(
         is_swot = normalize_label(module) == "swot analysis"
 
         # ── Customer Segmentation Agent path ──────────────────────────────────
-        # When the CS module has placeholder columns (first CS slide), delegate
-        # the entire segment-identification + table-generation pipeline to the
-        # CustomerSegmentationAgent.  Subsequent CS slides hit the cache path
-        # below and continue through the standard retrieval flow.
-        # When cowork_guidance is provided (from End conversation summary), the
-        # agent uses the methodology guide to drive segment identification from data.
+        # Per-cell retrieval + LLM fill. Segment column names must come from
+        # cowork_guidance.segment_names or from a prior cached fill — not from
+        # document-only extraction.
         if has_placeholder_columns(placeholder_cols) and not is_ms_slide3 and _is_cs:
             with stage_scope("customer_segmentation_agent"):
-                use_cowork = bool(cowork_guidance and cowork_guidance.get("summary"))
-                if use_cowork:
+                n_segments = len(placeholder_cols)
+                cached = get_segment_names(module, slide_idx)
+                cowork_segments: list[str] | None = None
+                if cowork_guidance and isinstance(cowork_guidance.get("segment_names"), list):
+                    cowork_segments = [
+                        str(s).strip()
+                        for s in cowork_guidance["segment_names"]
+                        if str(s).strip()
+                    ]
+
+                if cowork_segments:
+                    resolved_segments = cowork_segments[:n_segments]
                     logger.info(
-                        "CS agent: using cowork methodology guidance module=%s",
+                        "CS agent: using cowork segment names module=%s n=%d",
                         module,
+                        len(resolved_segments),
                     )
-                if get_segment_names(module, slide_idx) is not None and not use_cowork:
-                    # Cache hit: reuse segments (only valid for slide_idx > cached slide).
-                    segment_names = get_segment_names(module, slide_idx)
+                elif cached is not None:
+                    resolved_segments = [
+                        str(s).strip() for s in cached if str(s).strip()
+                    ][:n_segments]
                     logger.info(
                         "CS agent: reusing cached segment names module=%s names=%s",
                         module,
-                        segment_names,
+                        resolved_segments,
                     )
                 else:
-                    from modules._registry import get_module
-                    provider = get_module(module)
-                    agent = provider.get_table_fill_agent() if provider else None
-                    if not agent:
-                        raise RuntimeError(
-                            f"No table fill agent for module {module!r}; "
-                            "CustomerSegmentationProvider should be registered."
+                    raise RuntimeError(
+                        "Customer Segmentation slide 1 requires segment names from the "
+                        "cowork session (agreed segments) or a prior successful fill cached "
+                        "for this module. End the cowork conversation with segment names, or "
+                        "re-run fill after segment names were cached."
+                    )
+
+                while len(resolved_segments) < n_segments:
+                    resolved_segments.append(f"Segment {len(resolved_segments) + 1}")
+                resolved_segments = resolved_segments[:n_segments]
+
+                from modules._registry import get_module
+
+                provider = get_module(module)
+                agent = provider.get_table_fill_agent() if provider else None
+                if not agent:
+                    raise RuntimeError(
+                        f"No table fill agent for module {module!r}; "
+                        "CustomerSegmentationProvider should be registered."
+                    )
+
+                if cowork_guidance and str(cowork_guidance.get("summary") or "").strip():
+                    logger.info(
+                        "CS agent: cowork methodology summary present module=%s",
+                        module,
+                    )
+
+                logger.info(
+                    "CS agent: placeholder columns (%d), per-cell pipeline module=%s",
+                    n_segments,
+                    module,
+                )
+                fill_trace: dict[str, Any] | None = (
+                    {} if _should_write_fill_trace(slide_idx, module) else None
+                )
+                agent_result = agent.run(
+                    file_ids=file_ids,
+                    n_segments=n_segments,
+                    indexes=indexes,
+                    module=module,
+                    trace_capture=fill_trace,
+                    cowork_guidance=cowork_guidance,
+                    segment_names=resolved_segments,
+                )
+                segment_names = agent_result["segment_names"]
+                table_data = agent_result["table_data"]
+                set_segment_names(module, segment_names, slide_idx)
+                logger.info(
+                    "CS agent: done module=%s maturity=%s segments=%s rows=%d",
+                    module,
+                    agent_result.get("maturity"),
+                    segment_names,
+                    len(table_data),
+                )
+
+                with stage_scope("trace_persist"):
+                    if fill_trace is not None:
+                        cs_log = fill_trace.get("cs_fill_log_dir")
+                        cs_header = (
+                            f"=== customer_segmentation session logs ===\n{cs_log}\n"
+                            f"(run_meta.json, segments_*.md, cells/ per-cell LLM + retrieval)\n\n"
+                            if cs_log
+                            else ""
                         )
-                    n_segments = len(placeholder_cols)
-                    logger.info(
-                        "CS agent: placeholder columns detected (%d), launching agent module=%s",
-                        n_segments,
-                        module,
-                    )
-                    fill_trace: dict[str, Any] | None = (
-                        {} if _should_write_fill_trace(slide_idx, module) else None
-                    )
-                    agent_result = agent.run(
-                        file_ids=file_ids,
-                        n_segments=n_segments,
-                        indexes=indexes,
-                        module=module,
-                        trace_capture=fill_trace,
-                        cowork_guidance=cowork_guidance if use_cowork else None,
-                    )
-                    segment_names = agent_result["segment_names"]
-                    table_data = agent_result["table_data"]
-                    set_segment_names(module, segment_names, slide_idx)
-                    logger.info(
-                        "CS agent: done module=%s maturity=%s facet_cache_hit=%s segments=%s rows=%d",
-                        module,
-                        agent_result.get("maturity"),
-                        agent_result.get("facet_cache_hit"),
-                        segment_names,
-                        len(table_data),
-                    )
+                        write_fill_trace(
+                            slide_idx=slide_idx,
+                            module=module,
+                            system_prompt=cs_header + str(fill_trace.get("system_prompt", "")),
+                            user_prompt=str(fill_trace.get("user_prompt", "")),
+                            llm_raw_response=str(fill_trace.get("llm_raw_response", "")),
+                        )
 
-                    with stage_scope("trace_persist"):
-                        if fill_trace is not None:
-                            write_fill_trace(
-                                slide_idx=slide_idx,
-                                module=module,
-                                system_prompt=str(fill_trace.get("system_prompt", "")),
-                                user_prompt=str(fill_trace.get("user_prompt", "")),
-                                llm_raw_response=str(fill_trace.get("llm_raw_response", "")),
-                            )
+                logger.info(
+                    "run_fill done slide_idx=%d module=%s output_rows=%d column_headers=%s elapsed_ms=%d",
+                    slide_idx,
+                    module,
+                    len(table_data),
+                    segment_names,
+                    int((time.perf_counter() - start) * 1000),
+                )
 
-                    logger.info(
-                        "run_fill done slide_idx=%d module=%s output_rows=%d column_headers=%s elapsed_ms=%d",
-                        slide_idx,
-                        module,
-                        len(table_data),
-                        segment_names,
-                        int((time.perf_counter() - start) * 1000),
-                    )
+                with stage_scope("cache_update"):
+                    set_slide_table(slide_idx, {
+                        "slide_idx": slide_idx,
+                        "module": module,
+                        "column_headers": segment_names,
+                        "indexes": indexes,
+                        "table_data": table_data,
+                    })
 
-                    with stage_scope("cache_update"):
-                        set_slide_table(slide_idx, {
-                            "slide_idx": slide_idx,
-                            "module": module,
-                            "column_headers": segment_names,
-                            "indexes": indexes,
-                            "table_data": table_data,
-                        })
-
-                    return {"table_data": table_data, "column_headers": segment_names}
+                return {"table_data": table_data, "column_headers": segment_names}
 
         # ── Standard segment name resolution (non-CS or CS cache hit) ─────────
         if has_placeholder_columns(placeholder_cols) and not is_ms_slide3:

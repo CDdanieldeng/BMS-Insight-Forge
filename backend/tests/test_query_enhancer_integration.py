@@ -9,7 +9,9 @@ from generation.orchestrator import run_fill
 
 
 class TestEnhancerIntegration(unittest.TestCase):
-    def test_run_fill_uses_resolved_segment_headers_for_query_enhancement(self):
+    def test_run_fill_passes_resolved_headers_to_context_loader(self):
+        # Use SWOT (not Customer Segmentation): CS slide 1 with placeholders uses
+        # the per-cell agent instead of this placeholder-resolution path.
         with patch(
             "generation.orchestrator.get_full_markdown_context",
             return_value="full content for segment extraction",
@@ -17,9 +19,6 @@ class TestEnhancerIntegration(unittest.TestCase):
             "generation.orchestrator.extract_segment_names",
             return_value=["Value Seekers"],
         ), patch(
-            "generation.orchestrator.enhance_query",
-            return_value="seed query",
-        ) as mock_enhance, patch(
             "generation.orchestrator.get_context_content",
             return_value="evidence context",
         ) as mock_context, patch(
@@ -28,22 +27,20 @@ class TestEnhancerIntegration(unittest.TestCase):
         ):
             res = run_fill(
                 slide_idx=1,
-                module="Customer Segmentation",
+                module="SWOT Analysis",
                 file_ids=["f1"],
                 table_structure={"columns": ["", "Segment 1"], "indexes": ["Preferences"]},
             )
         self.assertIn("table_data", res)
-        mock_enhance.assert_called_once()
-        enhance_args, _ = mock_enhance.call_args
-        self.assertEqual(enhance_args[0], "Customer Segmentation")
+        mock_context.assert_called_once()
+        ca = mock_context.call_args
+        self.assertEqual(ca.args[0], ["f1"])
+        self.assertEqual(ca.args[1] if len(ca.args) > 1 else ca.kwargs.get("query", ""), "")
+        self.assertEqual(ca.kwargs.get("module"), "SWOT Analysis")
         self.assertEqual(
-            enhance_args[1],
+            ca.kwargs.get("table_structure"),
             {"columns": ["", "Value Seekers"], "indexes": ["Preferences"]},
         )
-        context_args, context_kwargs = mock_context.call_args
-        self.assertEqual(context_args[0], ["f1"])
-        self.assertEqual(context_args[1], "seed query")
-        self.assertEqual(context_kwargs.get("module"), "Customer Segmentation")
 
 
 if __name__ == "__main__":

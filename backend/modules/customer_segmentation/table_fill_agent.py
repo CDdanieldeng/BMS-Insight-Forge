@@ -1,7 +1,7 @@
 """Table fill agent for Customer Segmentation.
 
-Wraps CustomerSegmentationAgent for placeholder-based segment identification
-and table generation (slide 1 path).
+Wraps CustomerSegmentationAgent: per-cell retrieval and table fill for slide 1.
+Segment column names must be supplied by the orchestrator (cowork or cache).
 """
 
 from __future__ import annotations
@@ -26,8 +26,9 @@ class CustomerSegmentationTableFillAgent:
         module: str,
         trace_capture: dict[str, Any] | None = None,
         cowork_guidance: dict[str, Any] | None = None,
+        segment_names: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run segment identification and table generation."""
+        """Run per-cell retrieval + table generation (segment names from cowork or cache)."""
         return self._agent.run(
             file_ids=file_ids,
             n_segments=n_segments,
@@ -35,4 +36,5 @@ class CustomerSegmentationTableFillAgent:
             module=module,
             trace_capture=trace_capture,
             cowork_guidance=cowork_guidance,
+            segment_names=segment_names,
         )

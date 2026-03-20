@@ -92,7 +92,11 @@ from .query_rewrite import (
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-from .orchestration import run_retrieval_pipeline
+from .orchestration import (
+    IndexedRetrievalCorpus,
+    build_indexed_retrieval_corpus,
+    run_retrieval_pipeline,
+)
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -130,5 +134,7 @@ __all__ = [
     "rewrite_for_retrieval",
     "rewrite_segment_guidance",
     # Orchestration
+    "IndexedRetrievalCorpus",
+    "build_indexed_retrieval_corpus",
     "run_retrieval_pipeline",
 ]
