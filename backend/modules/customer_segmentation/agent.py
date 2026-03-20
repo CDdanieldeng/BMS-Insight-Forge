@@ -31,7 +31,7 @@ from generation.stage_metrics import record_llm_usage, stage_scope
 
 logger = setup_logging("cs_agent_generation")
 
-MIN_SEGMENTS = 2
+MIN_SEGMENTS = 1
 MISSING_PROPOSED_SEGMENT_HEADER = "proposed segment can not be found in given files"
 NOT_FOUND_CELL_TEXT = "Not found in provided materials."
 _CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
@@ -297,32 +297,52 @@ GENERAL SEGMENTATION GUIDELINES
 Customers refer only to HCPs (physicians, specialists, prescribers, clinical decision makers). \
 Do NOT create segments for payers, regulators, procurement bodies, government stakeholders, or patients.
 
+CRITICAL SEGMENTATION RULES
+- A segment must represent a group of multiple HCPs, NOT an individual
+- DO NOT create one segment per HCP
+- Prefer fewer, broader, meaningful segments over many narrow ones
+- All segments must be mutually exclusive and collectively exhaustive
+
 SOURCING RULES (CRITICAL)
-1. Only include segment distinctions explicitly supported by the source material.
-2. Do not logically deduce traits not stated in the documents.
-3. The methodology guide is a search lens — it tells you what to look for; \
-evidence must come from the uploaded materials.
+1. Base segmentation primarily on evidence from the uploaded material
+2. You may use limited general knowledge ONLY when required by the segmentation lens \
+   (e.g., classifying well-known cities into Tier 1 / Tier 2 / Tier 3)
+3. Do NOT invent attributes not grounded in either the text or widely accepted general knowledge
+4. The methodology guide is a search lens — it tells you what to look for; \
+   evidence must come from the uploaded materials when available
+
+INFERENCE ALLOWANCE (IMPORTANT)
+- When the segmentation lens requires classification (e.g., city tier), \
+  you may infer using widely recognized conventions
+- Example: Beijing / Shanghai / Guangzhou are Tier 1 cities
+
+FALLBACK RULE (VERY IMPORTANT)
+- If the data does NOT contain clear differentiation signals, \
+  reduce the number of segments
+- It is acceptable to return fewer than {n_segments} segments
+- Prefer 1–2 meaningful segments over forced or artificial segmentation
 
 NAMING RULES
 - Concise and descriptive (< 5 words each)
 - Mutually exclusive and collectively exhaustive across the identified HCPs
 - Respectful and neutral
-- Names should reflect the segmentation lens described in the methodology guide; \
-candidate directions mentioned there are examples to inspire naming, not fixed labels
+- Names should reflect the segmentation lens described in the methodology guide
 
 Your goal is to identify between {min_segments} and {n_segments} distinct, \
 mutually exclusive HCP segments that best match the methodology guide and the evidence.
 
 Return ONLY a valid JSON flat array of segment name strings.
-No markdown, no explanation, no extra keys."""
-
+No markdown, no explanation, no extra keys.
+All in English
+"""
 _SYNTHESIZE_WITH_METHODOLOGY_USER = """\
 Number of segments to return: between {min_segments} and {n_segments}
 
 Uploaded material:
 {content}
 
-Following the methodology guide above, identify the HCP segments now:"""
+Following the methodology guide above, identify the HCP segments now.
+"""
 
 
 # The table generation prompt is delegated to slide1.build_prompts() to keep
@@ -565,8 +585,34 @@ class CustomerSegmentationAgent:
         query: str,
         table_structure: dict[str, Any] | None = None,
         module: str = "customer segmentation",
+        raw_query: str | None = None,
+        session_upload_docs: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Return full markdown context for the given file_ids."""
+        """
+        Return context for the given file_ids.
+
+        When raw_query is present, runs retriever pipeline (query rewrite →
+        facet → chunk → embed → recall → rerank) with fallback to full markdown.
+        Otherwise returns full markdown.
+        """
+        if raw_query and (raw_query or "").strip():
+            from generation.context_provider import get_retrieval_context
+
+            content, meta = get_retrieval_context(
+                file_ids=file_ids,
+                raw_query=raw_query,
+                session_upload_docs=session_upload_docs,
+                correlation_key=f"cs_{module}",
+            )
+            logger.info(
+                "CS agent: retrieved context file_ids=%d raw_query=yes recalled=%d reranked=%d content_len=%d",
+                len(file_ids),
+                meta.get("recalled_count", 0),
+                meta.get("reranked_count", 0),
+                len(content),
+            )
+            return content
+
         from generation.context_provider import get_full_markdown_context
 
         content = get_full_markdown_context(file_ids)
@@ -578,6 +624,47 @@ class CustomerSegmentationAgent:
         )
         return content
 
+    def _table_fill_document_context(
+        self,
+        file_ids: list[str],
+        session_upload_docs: list[dict[str, Any]] | None,
+    ) -> str:
+        """
+        Full source text for slide-1 table fill: cowork uploads (if any) plus all
+        ingested file markdown. Avoids chunk retrieval so the table LLM can scan
+        entire materials (same merge order as the retriever pipeline).
+        """
+        from generation.context_provider import get_full_markdown_context
+
+        parts: list[str] = []
+        if session_upload_docs:
+            for i, d in enumerate(session_upload_docs):
+                text = (
+                    (d.get("markdown_content") or d.get("text") or "")
+                    if isinstance(d, dict)
+                    else ""
+                ).strip()
+                if not text:
+                    continue
+                fname = str(
+                    (d.get("filename") or d.get("file_id") or f"cowork_upload_{i}")
+                    if isinstance(d, dict)
+                    else f"cowork_upload_{i}"
+                )
+                parts.append(f"## Cowork upload: {fname}\n\n{text}")
+
+        files_block = get_full_markdown_context(file_ids)
+        if files_block.strip():
+            parts.append(files_block.strip())
+
+        combined = "\n\n---\n\n".join(parts)
+        logger.info(
+            "CS agent: table fill full-doc context file_ids=%d session_docs=%d chars=%d",
+            len(file_ids),
+            len(session_upload_docs or []),
+            len(combined),
+        )
+        return combined
 
     # ------------------------------------------------------------------
     # Step helpers
@@ -791,30 +878,21 @@ class CustomerSegmentationAgent:
         indexes: list[str],
         module: str,
         trace_capture: dict[str, Any] | None = None,
-        cowork_summary: str | None = None,
+        raw_query: str | None = None,
+        session_upload_docs: list[dict[str, Any]] | None = None,
     ) -> list[list[str]]:
         """Step 3: generate slide table content using slide1 prompt rules.
 
-        Retrieves relevant context via the evidence pipeline (facet-gated
-        hybrid retrieval) rather than dumping all file content, keeping the
-        prompt within the model's token limit regardless of how many files
-        are uploaded.
+        Uses full markdown from uploaded files (and cowork session uploads when
+        present) so the model can scan entire materials. If the prompt would
+        exceed the segment-step token budget, document text is truncated (not
+        replaced with retrieval chunks). Methodology/cowork guidance is still
+        passed via *raw_query* into the prompt, not as retrieval.
         """
         from modules.customer_segmentation.slides.slide1 import build_prompts
 
         with stage_scope("cs_agent_generate_table"):
-            # Build a targeted retrieval query from the known segments and row labels.
-            query = (
-                f"HCP customer segment {' '.join(segments[:4])} "
-                f"{' '.join(indexes[:6])}"
-            )
-            table_structure: dict[str, Any] = {
-                "columns": [""] + segments,
-                "indexes": indexes,
-            }
-            content = self._retrieve_context(
-                file_ids, query, table_structure=table_structure, module=module
-            )
+            content = self._table_fill_document_context(file_ids, session_upload_docs)
 
             if not content.strip():
                 logger.warning(
@@ -829,8 +907,29 @@ class CustomerSegmentationAgent:
                 ]
 
             system_prompt, user_prompt = build_prompts(
-                content, indexes, segments, cowork_summary=cowork_summary
+                content, indexes, segments, raw_query=raw_query
             )
+
+            if self._would_exceed_segment_prompt_budget(system_prompt, user_prompt):
+                segments_list = ", ".join(f'"{s}"' for s in segments)
+                user_tmpl = (
+                    "Segments to populate (columns): {segments_list}\n\n"
+                    "Row labels to fill (in order): {indexes}\n\n"
+                    "Content from uploaded materials:\n{content}\n\n"
+                    "Return the JSON array of arrays now:"
+                )
+                content = self._truncate_content_for_budget(
+                    content=content,
+                    system_prompt=system_prompt,
+                    user_template=user_tmpl,
+                    user_template_args={
+                        "segments_list": segments_list,
+                        "indexes": f"{indexes}",
+                    },
+                )
+                system_prompt, user_prompt = build_prompts(
+                    content, indexes, segments, raw_query=raw_query
+                )
 
             if trace_capture is not None:
                 trace_capture["system_prompt"] = system_prompt
@@ -916,9 +1015,10 @@ class CustomerSegmentationAgent:
         """
         Run the full CS agent pipeline.
 
-        All steps use targeted retrieval via the evidence pipeline rather than
-        receiving a pre-built full-content dump, keeping every LLM call within
-        the model's token limit regardless of how many files are uploaded.
+        Segment naming steps use targeted retrieval or full markdown depending on
+        path; table generation (step 3) uses full uploaded markdown (plus cowork
+        session uploads when provided), with truncation only if the prompt would
+        exceed the configured token budget.
 
         When cowork_guidance is provided (from End conversation summary), its
         methodology guide steers segment synthesis from the uploaded data instead
@@ -928,7 +1028,7 @@ class CustomerSegmentationAgent:
         Step 1: classify maturity (only on cache miss, uses broad retrieval).
         Step 2: extract/synthesize segment names (uses targeted retrieval);
                 methodology-guided when cowork_guidance is present.
-        Step 3: generate table (always, uses segment+row-label targeted retrieval).
+        Step 3: generate table (always, uses full document markdown + optional session uploads).
 
         Returns:
             {
@@ -961,9 +1061,22 @@ class CustomerSegmentationAgent:
             facet_cache_hit = True
             maturity = "cowork_guided"
 
-            from generation.context_provider import get_full_markdown_context
+            session_upload_docs = (cowork_guidance or {}).get("session_upload_docs")
+            if session_upload_docs and isinstance(session_upload_docs, list):
+                session_upload_docs = [
+                    d if isinstance(d, dict) else {"filename": getattr(d, "filename", ""), "markdown_content": getattr(d, "markdown_content", "")}
+                    for d in session_upload_docs
+                ]
+            else:
+                session_upload_docs = None
 
-            synth_content = get_full_markdown_context(file_ids)
+            synth_content = self._retrieve_context(
+                file_ids,
+                "HCP customer segments segmentation methodology",
+                module=module,
+                raw_query=methodology,
+                session_upload_docs=session_upload_docs,
+            )
             rendered_system = _SYNTHESIZE_WITH_METHODOLOGY_SYSTEM.format(
                 methodology=methodology.strip(),
                 min_segments=MIN_SEGMENTS,
@@ -1017,7 +1130,8 @@ class CustomerSegmentationAgent:
                 indexes,
                 module,
                 trace_capture=trace_capture,
-                cowork_summary=methodology,
+                raw_query=methodology,
+                session_upload_docs=session_upload_docs,
             )
             return {
                 "segment_names": segments,

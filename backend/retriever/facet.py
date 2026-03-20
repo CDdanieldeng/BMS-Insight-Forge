@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from enum import Enum
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from shared.llm_client import complete
 
@@ -46,6 +46,20 @@ class FacetExtractionResult(TypedDict):
 
     file_type: str
     summary: str
+    filename: str
+    topics: list[str]
+
+
+def _normalize_topics(raw: Any) -> list[str]:
+    """Coerce LLM output into a list of non-empty topic strings."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    if isinstance(raw, str):
+        s = raw.strip()
+        return [s] if s else []
+    return []
 
 
 def _truncate_to_first_pages(content: str, n_pages: int = _NUM_PAGES_FOR_FACET) -> str:
@@ -75,7 +89,8 @@ def classify_document_facet(
         filename: Optional filename for extension-based hints.
 
     Returns:
-        Dict with "file_type" (e.g. "transcript") and "summary" (brief summary).
+        Dict with file_type, summary, filename (same as the filename argument), and
+        topics (list of short theme or subject labels from the LLM).
     """
     truncated = _truncate_to_first_pages(content)
     logger.info(
@@ -90,9 +105,12 @@ def classify_document_facet(
         "You are a document classifier. Analyze the given document excerpt and respond with a JSON object only, no other text. "
         f"Set 'file_type' to exactly one of: {facet_list}. "
         "Set 'summary' to a brief 1–2 sentence summary of the document content. "
+        "Set 'topics' to a JSON array of 3–8 short strings: main themes, audiences, products, or subject areas (no duplicates). "
         "Respond with valid JSON only."
     )
-    user_prompt = f"Document excerpt:\n\n{truncated}"
+    user_prompt = (
+        f"Filename (context): {filename or '(unknown)'}\n\nDocument excerpt:\n\n{truncated}"
+    )
 
     try:
         raw = complete(
@@ -115,6 +133,7 @@ def classify_document_facet(
         parsed = json.loads(text)
         file_type = str(parsed.get("file_type", "others")).strip().lower()
         summary = str(parsed.get("summary", "")).strip()
+        topics = _normalize_topics(parsed.get("topics"))
         # Normalize to known facet
         if file_type not in FACET_VALUES:
             logger.warning(
@@ -123,11 +142,17 @@ def classify_document_facet(
                 filename or "(unnamed)",
             )
             file_type = "others"
-        result = {"file_type": file_type, "summary": summary}
+        result: FacetExtractionResult = {
+            "file_type": file_type,
+            "summary": summary,
+            "filename": filename,
+            "topics": topics,
+        }
         logger.info(
-            "Facet extraction complete file_type=%s summary_len=%d filename=%s",
+            "Facet extraction complete file_type=%s summary_len=%d topics=%d filename=%s",
             file_type,
             len(summary),
+            len(topics),
             filename or "(unnamed)",
         )
         return result
@@ -137,7 +162,12 @@ def classify_document_facet(
             filename or "(unnamed)",
             e,
         )
-        return {"file_type": "others", "summary": f"(extraction failed: {e})"}
+        return {
+            "file_type": "others",
+            "summary": f"(extraction failed: {e})",
+            "filename": filename,
+            "topics": [],
+        }
 
 
 
@@ -148,15 +178,13 @@ if __name__ == "__main__":
     Moderator: Can you describe your typical customer?
     Respondent: We focus on mid-sized hospitals in tier-2 cities...
     """
-    result = classify_document_facet(sample)
-    print(result)  
+    result = classify_document_facet(sample, filename="sales_call.txt")
+    print(result)
 
-    # Example output:
+    # Example output shape:
     # {
     #   'file_type': 'transcript',
-    #   'summary': (
-    #     'This document is an interview transcript from a sales call. '
-    #     'The respondent talks about their typical customers, describing them as '
-    #     'mid-sized hospitals located in tier-2 cities.'
-    #   )
+    #   'summary': '...',
+    #   'filename': 'sales_call.txt',
+    #   'topics': ['hospital sales', 'customer profile', 'tier-2 cities', ...],
     # }

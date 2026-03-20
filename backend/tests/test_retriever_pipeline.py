@@ -2,7 +2,7 @@
 Integration test for retriever pipeline: facet, chunking, embedding, recall, and rerank.
 
 Pipelines:
-  1. facet.classify_document_facet(text) → {file_type, summary}
+  1. facet.classify_document_facet(text) → {file_type, summary, filename, topics}
   2. chunking.chunk_text(text, facet) → chunks
   3. embedding.embed(chunk texts) → vectors
   4. recall.recall(query_embedding, ...) → candidate chunks
@@ -147,12 +147,17 @@ class TestRetrieverPipeline(unittest.TestCase):
     def test_pipeline_transcript(self, mock_complete: MagicMock) -> None:
         """Transcript: facet classify → chunk by Q&A → embed."""
         text = MOCK_TEXTS["transcript"]
-        mock_complete.return_value = '{"file_type": "transcript", "summary": "Sales interview"}'
+        mock_complete.return_value = (
+            '{"file_type": "transcript", "summary": "Sales interview", '
+            '"topics": ["interviews", "hospitals"]}'
+        )
 
         # 1. Facet
-        result = classify_document_facet(text)
+        result = classify_document_facet(text, filename="call.md")
         self.assertEqual(result["file_type"], "transcript")
         self.assertIn("summary", result)
+        self.assertEqual(result["filename"], "call.md")
+        self.assertEqual(result["topics"], ["interviews", "hospitals"])
 
         facet = DocumentFacet(result["file_type"])
 
@@ -180,6 +185,29 @@ class TestRetrieverPipeline(unittest.TestCase):
             chunks=chunks,
             vectors=vectors,
         )
+
+    def test_transcript_chunking_preserves_qa_structure(self) -> None:
+        """Transcript chunking must not cut Q&A pairs; supports 问题 Q1 format."""
+        # HCP-style transcript with space between 问题 and Q (real format)
+        text = """问题 Q1. 请您简单介绍一下您的执业背景
+答案：我在天津三甲医院，主任医师，从业时间较长。
+
+问题 Q3. 您如何理解中重度银屑病的严重性和长期影响
+答案：银屑病重要，但我不会把它看得过于"需要激进管理"。
+
+问题 Q4. 您在临床上如何区分轻/中/重度
+答案：我主要还是凭经验和临床观察判断严重度。"""
+        chunks = chunk_text(text, DocumentFacet.TRANSCRIPT)
+        self.assertGreaterEqual(len(chunks), 3, "Should get at least 3 Q&A chunks")
+        # Each chunk must contain both 问题 and 答案 (full Q&A pair)
+        for c in chunks:
+            txt = c["text"]
+            if txt.strip().startswith("问题") or "问题 Q" in txt or "问题Q" in txt:
+                self.assertIn("答案", txt, "Q&A chunk must include answer")
+        # First Q&A chunk must start with 问题 Q1 (not just Q1)
+        first_qa = next((c for c in chunks if "问题 Q1" in c["text"] or "Q1." in c["text"]), None)
+        self.assertIsNotNone(first_qa)
+        self.assertIn("答案", first_qa["text"], "First Q&A chunk must have question + answer")
 
     @patch("retriever.facet.complete")
     def test_pipeline_swot(self, mock_complete: MagicMock) -> None:
@@ -471,6 +499,158 @@ class TestRerank(unittest.TestCase):
             self.assertGreaterEqual(result[0]["rerank_score"], result[1]["rerank_score"])
             self.assertEqual(result[0]["text"], "预训练语言模型与文本排序")
             self.assertEqual(result[1]["text"], "文本排序模型用于搜索引擎")
+
+
+# ---------------------------------------------------------------------------
+# Orchestration and retrieval pipeline integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestration(unittest.TestCase):
+    """Test run_retrieval_pipeline: query rewrite, source merge, recall/rerank counts."""
+
+    @patch("retriever.query_rewrite.complete")
+    @patch("retriever.facet.complete")
+    @patch("retriever.embedding._default_embedder")
+    @patch("retriever.orchestration.get_document_text")
+    @patch("retriever.orchestration.get_document_meta")
+    def test_run_retrieval_pipeline_summary_only_query_rewrite(
+        self,
+        mock_meta: MagicMock,
+        mock_text: MagicMock,
+        mock_emb: MagicMock,
+        mock_facet: MagicMock,
+        mock_qw: MagicMock,
+    ) -> None:
+        """Query rewrite uses cowork summary as input (summary_only)."""
+        from retriever.orchestration import run_retrieval_pipeline
+
+        mock_qw.return_value = "HCP city tier segmentation evidence"
+        mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
+        mock_text.return_value = "Sample document about city tier segmentation for HCPs."
+        mock_meta.return_value = {"filename": "doc1.pdf"}
+        mock_emb.embed.side_effect = _mock_embed
+
+        content, meta = run_retrieval_pipeline(
+            raw_query="Business Objective: city tier.\nSegmentation Lens: city tier.",
+            file_ids=[],
+            session_upload_docs=[{"filename": "up.pdf", "markdown_content": "City tier HCP evidence."}],
+            recall_top_k=5,
+            rerank_top_k=2,
+        )
+        self.assertGreater(meta["query_len"], 0)
+        self.assertIn("recalled_count", meta)
+        self.assertIn("reranked_count", meta)
+
+    @patch("retriever.query_rewrite.complete")
+    @patch("retriever.facet.complete")
+    @patch("retriever.embedding._default_embedder")
+    def test_run_retrieval_pipeline_both_source_merge(
+        self,
+        mock_emb: MagicMock,
+        mock_facet: MagicMock,
+        mock_qw: MagicMock,
+    ) -> None:
+        """Both session_upload_docs and ingested file_ids are merged."""
+        from generation.document_store import _store, _doc_meta_store
+        from retriever.orchestration import run_retrieval_pipeline
+
+        mock_qw.return_value = "evidence"
+        mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
+        mock_emb.embed.side_effect = _mock_embed
+
+        fid = "ingested_123"
+        orig_store = dict(_store)
+        orig_meta = dict(_doc_meta_store)
+        try:
+            _store[fid] = "Ingested document content for retrieval."
+            _doc_meta_store[fid] = {"filename": "ingested.pdf"}
+            content, meta = run_retrieval_pipeline(
+                raw_query="Test summary.",
+                file_ids=[fid],
+                session_upload_docs=[{"filename": "session.pdf", "markdown_content": "Session upload content."}],
+                recall_top_k=5,
+                rerank_top_k=3,
+            )
+            self.assertGreater(meta["recalled_count"], 0)
+            self.assertGreater(meta["reranked_count"], 0)
+        finally:
+            _store.clear()
+            _store.update(orig_store)
+            _doc_meta_store.clear()
+            _doc_meta_store.update(orig_meta)
+
+    def test_run_retrieval_pipeline_empty_summary_returns_empty(self) -> None:
+        """Empty raw_query returns empty content and zero counts."""
+        from retriever.orchestration import run_retrieval_pipeline
+
+        content, meta = run_retrieval_pipeline(
+            raw_query="",
+            file_ids=[],
+        )
+        self.assertEqual(content, "")
+        self.assertEqual(meta["recalled_count"], 0)
+        self.assertEqual(meta["reranked_count"], 0)
+
+    @patch("retriever.query_rewrite.complete")
+    @patch("retriever.facet.complete")
+    @patch("retriever.embedding._default_embedder")
+    def test_run_retrieval_pipeline_recall_rerank_counts(
+        self,
+        mock_emb: MagicMock,
+        mock_facet: MagicMock,
+        mock_qw: MagicMock,
+    ) -> None:
+        """Metadata includes recalled_count and reranked_count for observability."""
+        from retriever.orchestration import run_retrieval_pipeline
+
+        mock_qw.return_value = "query"
+        mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
+        mock_emb.embed.side_effect = _mock_embed
+
+        content, meta = run_retrieval_pipeline(
+            raw_query="Summary",
+            file_ids=[],
+            session_upload_docs=[
+                {"filename": "a.pdf", "markdown_content": "Chunk one content here for retrieval test."},
+                {"filename": "b.pdf", "markdown_content": "Chunk two different content for retrieval."},
+            ],
+            recall_top_k=10,
+            rerank_top_k=2,
+        )
+        self.assertIn("recalled_count", meta)
+        self.assertIn("reranked_count", meta)
+        self.assertLessEqual(meta["reranked_count"], 2)
+
+
+class TestGetRetrievalContextFallback(unittest.TestCase):
+    """Test get_retrieval_context fallback to full markdown on empty/error."""
+
+    def test_get_retrieval_context_fallback_on_empty_summary(self) -> None:
+        """Empty raw_query triggers fallback; with no docs run_retrieval returns empty."""
+        from generation.document_store import _store, _doc_meta_store
+        from generation.context_provider import get_retrieval_context
+
+        fid = "fallback_test_1"
+        orig_store = dict(_store)
+        orig_meta = dict(_doc_meta_store)
+        try:
+            _store[fid] = "Fallback document."
+            _doc_meta_store[fid] = {"filename": "fallback.pdf"}
+            content, meta = get_retrieval_context(
+                file_ids=[fid],
+                raw_query="",
+                correlation_key="test",
+            )
+            # Empty raw_query causes run_retrieval_pipeline to return "" immediately.
+            # Then we fallback to full markdown, so we get the stored content.
+            self.assertIn("Fallback document.", content)
+            self.assertTrue(meta.get("fallback_used", False) or meta["recalled_count"] == 0)
+        finally:
+            _store.clear()
+            _store.update(orig_store)
+            _doc_meta_store.clear()
+            _doc_meta_store.update(orig_meta)
 
 
 if __name__ == "__main__":

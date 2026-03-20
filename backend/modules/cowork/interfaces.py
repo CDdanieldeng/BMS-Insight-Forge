@@ -50,5 +50,6 @@ class PPTFillAdapter(Protocol):
         slide_idx: int,
         table_data: list[list[str]],
         column_headers: list[str],
+        session_upload_docs: list | None = None,
     ) -> dict[str, Any]:
         ...

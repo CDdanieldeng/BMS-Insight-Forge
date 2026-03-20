@@ -39,6 +39,7 @@ class StageRun:
     module: str = ""
     slide_idx: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    _stage_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     started_at_epoch_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     _started_perf: float = field(default_factory=time.perf_counter)
@@ -46,6 +47,12 @@ class StageRun:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     status: str = "ok"
     error: str = ""
+
+    def record_stage_metadata(self, stage_name: str, **kwargs: Any) -> None:
+        """Record metadata for a stage (e.g. recalled_count, reranked_count)."""
+        if stage_name not in self._stage_metadata:
+            self._stage_metadata[stage_name] = {}
+        self._stage_metadata[stage_name].update(kwargs)
 
     def _stage(self, name: str) -> StageStat:
         if name not in self._stages:
@@ -92,8 +99,9 @@ class StageRun:
 
     def flush(self) -> None:
         elapsed_total = int((time.perf_counter() - self._started_perf) * 1000)
-        stages = {
-            name: {
+        stages = {}
+        for name, stat in sorted(self._stages.items()):
+            base = {
                 "elapsed_ms_total": stat.elapsed_ms_total,
                 "stage_calls": stat.stage_calls,
                 "llm_calls": stat.llm_calls,
@@ -102,8 +110,8 @@ class StageRun:
                 "total_tokens_total": stat.total_tokens_total,
                 "llm_elapsed_ms_total": stat.llm_elapsed_ms_total,
             }
-            for name, stat in sorted(self._stages.items())
-        }
+            extra = self._stage_metadata.get(name, {})
+            stages[name] = {**base, **extra}
         event = {
             "run_id": self.run_id,
             "operation": self.operation,
@@ -175,6 +183,17 @@ def stage_scope(name: str):
         return
     with run.stage(name):
         yield
+
+
+def record_stage_metadata(**kwargs: Any) -> None:
+    """Record per-stage metadata (e.g. recalled_count, reranked_count) for the current stage."""
+    run = _CURRENT_RUN.get()
+    if run is None:
+        return
+    stage_name = _CURRENT_STAGE.get()
+    if stage_name not in run._stage_metadata:
+        run._stage_metadata[stage_name] = {}
+    run._stage_metadata[stage_name].update(kwargs)
 
 
 def record_llm_usage(

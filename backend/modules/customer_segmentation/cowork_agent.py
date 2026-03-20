@@ -370,10 +370,12 @@ class CustomerSegmentationCoworkAgent:
 
         ppt_payload = None
         if ready_for_ppt_fill and session.working_draft.table_data:
+            session_docs = [d.model_dump() for d in session.direct_uploaded_docs] if session.direct_uploaded_docs else None
             ppt_payload = self.ppt_fill_adapter.build_payload(
                 slide_idx=req.slide_idx,
                 table_data=session.working_draft.table_data,
                 column_headers=session.working_draft.column_headers,
+                session_upload_docs=session_docs,
             )
 
         workflow = CoworkWorkflowMetadata(

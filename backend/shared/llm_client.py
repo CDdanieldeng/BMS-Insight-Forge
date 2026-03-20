@@ -29,10 +29,10 @@ _openai_client: Any = None
 _qwen_client: Any = None
 
 
-def _build_http_client() -> httpx.Client:
+def build_http_client() -> httpx.Client:
     """
-    Build an HTTP client with configurable TLS verification.
-    Useful for corp proxy/certificate environments.
+    Build an HTTP client with configurable TLS verification and timeout.
+    Useful for corp proxy/certificate environments. Used by LLM and embedding clients.
     """
     verify_env = os.getenv("LLM_SSL_VERIFY", "true").strip().lower()
     ca_bundle = (
@@ -49,6 +49,11 @@ def _build_http_client() -> httpx.Client:
         verify = ca_bundle
 
     return httpx.Client(timeout=timeout, verify=verify)
+
+
+def _build_http_client() -> httpx.Client:
+    """Alias for build_http_client (internal use)."""
+    return build_http_client()
 
 
 def _get_openai_client():

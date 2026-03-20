@@ -57,6 +57,7 @@ from .chunking import (
 # ---------------------------------------------------------------------------
 from .embedding import (
     BaseEmbedder,
+    Qwen3Embedding4BEmbedder,
     SentenceTransformerEmbedder,
     embed,
     embed_single,
@@ -89,6 +90,11 @@ from .query_rewrite import (
 )
 
 # ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+from .orchestration import run_retrieval_pipeline
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 __all__ = [
@@ -106,6 +112,7 @@ __all__ = [
     "get_chunking_strategy",
     # Embedding
     "BaseEmbedder",
+    "Qwen3Embedding4BEmbedder",
     "SentenceTransformerEmbedder",
     "embed",
     "embed_single",
@@ -122,4 +129,6 @@ __all__ = [
     "QWEN_TURBO",
     "rewrite_for_retrieval",
     "rewrite_segment_guidance",
+    # Orchestration
+    "run_retrieval_pipeline",
 ]

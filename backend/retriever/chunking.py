@@ -110,24 +110,28 @@ class TranscriptChunker(BaseChunker):
     """
     Chunker for interview/meeting transcripts.
 
-    Splits by Q&A pairs. Supports Chinese and English formats:
+    Splits by Q&A pairs to keep each question+answer intact (avoids cutting
+    mid-Q&A which hurts recall). Supports common Chinese and English formats:
 
     Chinese:
-        问题Q1. ...
-        答案：
+        问题Q1. / 问题 Q1. / 问题1 ... 答案：
+        问：... 答：
     English:
-        Question 1. ...  /  Q1. ...
-        Answer:
-        ...
+        Question 1. ...  /  Q1. ...  Answer:
+        Interviewer: / Interviewee:
 
-    Each chunk is one complete Q&A pair (question + answer).
-    Falls back to separator-based chunking when no Q&A structure is detected.
+    Each chunk = one complete Q&A pair. Falls back to separator-based
+    chunking when no Q&A structure is detected.
     """
 
-    # Regex: 问题Qn (Chinese) | Question n (English) | Qn (English)
+    # Q&A boundary markers (order matters: more specific first).
+    # Split only by "start of new question" so each chunk = full Q&A pair.
+    # 问题 Q1 / 问题Q1 / 问题1 | Question 1 | 问： (line-start) | Q1
     _QA_PATTERN = re.compile(
-        r"问题Q\s*\d+|Question\s*\d+|\bQ\s*\d+",
-        re.IGNORECASE,
+        r"问题\s*Q\s*\d+|问题Q\s*\d+|问题\s*\d+|Question\s*\d+"
+        r"|(?:^|\n)\s*问[：:]\s*"
+        r"|\bQ\s*\d+",
+        re.IGNORECASE | re.MULTILINE,
     )
 
     config = ChunkConfig(
@@ -282,10 +286,11 @@ def chunk_text(
 
 if __name__ == "__main__":
     # Run: cd backend && python -m retriever.chunking
-    text = """问题Q1. 你的典型客户是谁？
+    # Test both 问题Q1 and 问题 Q1 formats (both must produce structured Q&A chunks)
+    text = """问题 Q1. 您的典型客户是谁？
 答案：我们主要服务二线城市的中型医院。
 
-问题Q2. 最大的挑战是什么？
+问题 Q2. 最大的挑战是什么？
 答案：价格敏感度和竞品对比。"""
     chunks = chunk_text(text, DocumentFacet.TRANSCRIPT)
     print(f"Chunks: {len(chunks)}")

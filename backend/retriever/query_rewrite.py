@@ -19,13 +19,20 @@ QWEN_TURBO = "qwen-turbo"
 
 _SYSTEM_PROMPT = """You are a query optimization assistant for a semantic search system.
 
-Your task: given guidance or instruction text, produce a single concise retrieval query
-that will match document chunks containing the evidence described in the guidance.
+Your ONLY task: produce an EVIDENCE RETRIEVAL query — a query to find document passages that
+CONTAIN the relevant facts (names, locations, values, attributes), NOT passages that define or
+explain concepts.
+
+Target format: "Find evidence about [X] / [Y] / [Z]" — where X, Y, Z are concrete evidence types
+that would appear in source documents (e.g., city, hospital location, practicing city, region).
+
+CRITICAL — avoid definition/explanation direction:
+- GOOD: "physician city, hospital location, practicing city, region, Tier 1 Tier 2 Tier 3"
+- BAD: "what is city tier", "city tier definition", "explain city tier classification"
 
 Rules:
-- Extract key concepts, signals, and terminology that would appear in relevant passages.
-- Output 1–3 sentences or a short phrase rich in searchable terms.
-- Prioritize concrete criteria and what to look for over high-level objectives.
+- Output terms that would appear IN the evidence-bearing passages (place names, attributes).
+- Do NOT ask "what is X" or request definitions/explanations.
 - Do NOT output JSON or markdown. Return plain text only.
 """
 
@@ -33,7 +40,7 @@ Rules:
 def rewrite_for_retrieval(
     guidance_text: str,
     *,
-    user_prompt_suffix: str = "Produce a retrieval query:",
+    user_prompt_suffix: str = "Produce an evidence retrieval query (find passages containing this info, NOT definitions):",
     provider_override: str = "qwen",
     model_override: str = QWEN_TURBO,
     max_tokens: int = 256,
@@ -104,6 +111,11 @@ def rewrite_segment_guidance(
     """
     return rewrite_for_retrieval(
         segment_guidance,
+        user_prompt_suffix=(
+            "Produce an evidence retrieval query to find passages containing the evidence "
+            "described above (e.g. for city tier: physician city, hospital location, practicing "
+            "city, region — NOT definitions or explanations):"
+        ),
         provider_override=provider_override,
         model_override=model_override,
         max_tokens=max_tokens,

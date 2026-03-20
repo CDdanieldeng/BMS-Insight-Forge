@@ -85,9 +85,16 @@ class ExistingPPTFillAdapter(PPTFillAdapter):
         slide_idx: int,
         table_data: list[list[str]],
         column_headers: list[str],
+        session_upload_docs: list | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "slide_idx": slide_idx,
             "table_data": table_data,
             "column_headers": column_headers,
         }
+        if session_upload_docs:
+            payload["session_upload_docs"] = [
+                d if isinstance(d, dict) else {"filename": getattr(d, "filename", ""), "markdown_content": getattr(d, "markdown_content", "")}
+                for d in session_upload_docs
+            ]
+        return payload
