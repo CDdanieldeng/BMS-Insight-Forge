@@ -24,8 +24,8 @@ from langchain_openai import ChatOpenAI
 
 from shared.logging_config import setup_logging
 
-from generation.stage_metrics import record_llm_usage, stage_scope
-from retriever.orchestration import IndexedRetrievalCorpus
+from shared.stage_metrics import record_llm_usage, stage_scope
+from retriever.retrieval_pipeline import IndexedRetrievalCorpus
 
 from modules.customer_segmentation.fill_session_logger import (
     create_fill_session_dir,
@@ -239,7 +239,7 @@ class CustomerSegmentationAgent:
         session_dir: Path | None,
     ) -> tuple[int, int, str, str, str, str]:
         """Returns (row_idx, col_idx, value, system_prompt, user_prompt, raw_llm)."""
-        from retriever.orchestration import run_retrieval_pipeline
+        from retriever.retrieval_pipeline import run_retrieval_pipeline
         from modules.customer_segmentation.slides.slide1 import (
             build_methodology_block,
             build_single_cell_prompts,
@@ -317,7 +317,7 @@ class CustomerSegmentationAgent:
         session_dir: Path | None,
     ) -> list[list[str]]:
         from modules.customer_segmentation.slides.slide1 import NOT_FOUND_CELL_TEXT
-        from retriever.orchestration import build_indexed_retrieval_corpus
+        from retriever.retrieval_pipeline import build_indexed_retrieval_corpus
 
         not_found = NOT_FOUND_CELL_TEXT
         n_rows = len(indexes)

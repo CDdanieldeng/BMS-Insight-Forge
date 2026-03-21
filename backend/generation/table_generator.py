@@ -8,7 +8,7 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.stage_metrics import stage_scope
+from shared.stage_metrics import stage_scope
 from modules._slide_registry import get_prompt_builder
 from shared.llm_client import complete
 

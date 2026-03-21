@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.orchestrator import run_fill
+from generation.fill_pipeline import run_fill
 
 
 class TestEnhancerIntegration(unittest.TestCase):
@@ -13,16 +13,16 @@ class TestEnhancerIntegration(unittest.TestCase):
         # Use SWOT (not Customer Segmentation): CS slide 1 with placeholders uses
         # the per-cell agent instead of this placeholder-resolution path.
         with patch(
-            "generation.orchestrator.get_full_markdown_context",
+            "generation.fill_pipeline.get_full_markdown_context",
             return_value="full content for segment extraction",
         ), patch(
-            "generation.orchestrator.extract_segment_names",
+            "generation.fill_pipeline.extract_segment_names",
             return_value=["Value Seekers"],
         ), patch(
-            "generation.orchestrator.get_context_content",
+            "generation.fill_pipeline.get_context_content",
             return_value="evidence context",
         ) as mock_context, patch(
-            "generation.orchestrator.generate_table_content",
+            "generation.fill_pipeline.generate_table_content",
             return_value=[["ok"]],
         ):
             res = run_fill(

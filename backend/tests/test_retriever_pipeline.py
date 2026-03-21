@@ -512,8 +512,8 @@ class TestOrchestration(unittest.TestCase):
     @patch("retriever.query_rewrite.complete")
     @patch("retriever.facet.complete")
     @patch("retriever.embedding._default_embedder")
-    @patch("retriever.orchestration.get_document_text")
-    @patch("retriever.orchestration.get_document_meta")
+    @patch("retriever.retrieval_pipeline.get_document_text")
+    @patch("retriever.retrieval_pipeline.get_document_meta")
     def test_run_retrieval_pipeline_summary_only_query_rewrite(
         self,
         mock_meta: MagicMock,
@@ -523,7 +523,7 @@ class TestOrchestration(unittest.TestCase):
         mock_qw: MagicMock,
     ) -> None:
         """Query rewrite uses cowork summary as input (summary_only)."""
-        from retriever.orchestration import run_retrieval_pipeline
+        from retriever.retrieval_pipeline import run_retrieval_pipeline
 
         mock_qw.return_value = "HCP city tier segmentation evidence"
         mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
@@ -552,8 +552,8 @@ class TestOrchestration(unittest.TestCase):
         mock_qw: MagicMock,
     ) -> None:
         """Both session_upload_docs and ingested file_ids are merged."""
-        from generation.document_store import _store, _doc_meta_store
-        from retriever.orchestration import run_retrieval_pipeline
+        from documents.document_store import _doc_meta_store, _store
+        from retriever.retrieval_pipeline import run_retrieval_pipeline
 
         mock_qw.return_value = "evidence"
         mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
@@ -582,7 +582,7 @@ class TestOrchestration(unittest.TestCase):
 
     def test_run_retrieval_pipeline_empty_summary_returns_empty(self) -> None:
         """Empty raw_query returns empty content and zero counts."""
-        from retriever.orchestration import run_retrieval_pipeline
+        from retriever.retrieval_pipeline import run_retrieval_pipeline
 
         content, meta = run_retrieval_pipeline(
             raw_query="",
@@ -602,7 +602,7 @@ class TestOrchestration(unittest.TestCase):
         mock_qw: MagicMock,
     ) -> None:
         """Metadata includes recalled_count and reranked_count for observability."""
-        from retriever.orchestration import run_retrieval_pipeline
+        from retriever.retrieval_pipeline import run_retrieval_pipeline
 
         mock_qw.return_value = "query"
         mock_facet.return_value = '{"file_type": "others", "summary": "test"}'
@@ -632,7 +632,7 @@ class TestOrchestration(unittest.TestCase):
         mock_qw: MagicMock,
     ) -> None:
         """Subsequent pipeline runs with indexed_corpus must not call facet LLM again."""
-        from retriever.orchestration import (
+        from retriever.retrieval_pipeline import (
             build_indexed_retrieval_corpus,
             run_retrieval_pipeline,
         )
@@ -681,7 +681,7 @@ class TestGetRetrievalContextFallback(unittest.TestCase):
 
     def test_get_retrieval_context_fallback_on_empty_summary(self) -> None:
         """Empty raw_query triggers fallback; with no docs run_retrieval returns empty."""
-        from generation.document_store import _store, _doc_meta_store
+        from documents.document_store import _doc_meta_store, _store
         from generation.context_provider import get_retrieval_context
 
         fid = "fallback_test_1"

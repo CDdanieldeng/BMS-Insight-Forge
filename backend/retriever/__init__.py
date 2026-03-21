@@ -90,9 +90,9 @@ from .query_rewrite import (
 )
 
 # ---------------------------------------------------------------------------
-# Orchestration
+# Retrieval pipeline (query → chunks)
 # ---------------------------------------------------------------------------
-from .orchestration import (
+from .retrieval_pipeline import (
     IndexedRetrievalCorpus,
     build_indexed_retrieval_corpus,
     run_retrieval_pipeline,
@@ -133,7 +133,7 @@ __all__ = [
     "QWEN_TURBO",
     "rewrite_for_retrieval",
     "rewrite_segment_guidance",
-    # Orchestration
+    # Retrieval pipeline
     "IndexedRetrievalCorpus",
     "build_indexed_retrieval_corpus",
     "run_retrieval_pipeline",

@@ -1,7 +1,7 @@
 """
 Module-specific context merge and table postprocessing.
 
-Isolates logic for Messaging Strategy slide 3 and SWOT from the orchestrator.
+Isolates logic for Messaging Strategy slide 3 and SWOT from the fill pipeline.
 """
 
 from typing import Any
@@ -10,7 +10,7 @@ from generation.session_cache import (
     build_prior_table_primary_context,
     extract_prioritized_segments_from_customer_segmentation,
 )
-from generation.utils import normalize_label
+from shared.text_utils import normalize_label
 
 # Row indexes that identify Messaging Strategy slide 3.
 MESSAGING_STRATEGY_SLIDE3_INDEXES = [

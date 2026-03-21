@@ -1,15 +1,15 @@
-"""Shared utilities for generation pipeline."""
+"""Shared string normalization for modules, slides, and generation."""
 
 import re
-from typing import Any
-
-# Matches placeholder column names like "Segment 1", "segment 3", "SEGMENT 4"
-SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 
 
 def normalize_label(label: str) -> str:
     """Normalize row/module label for comparison (lowercase, collapsed whitespace)."""
     return " ".join((label or "").strip().lower().split())
+
+
+# Matches placeholder column names like "Segment 1", "segment 3", "SEGMENT 4"
+SEGMENT_PLACEHOLDER_RE = re.compile(r"^segment\s+\d+$", re.IGNORECASE)
 
 
 def has_placeholder_columns(columns: list[str]) -> bool:

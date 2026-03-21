@@ -108,10 +108,10 @@ class TestCustomerSegmentationAgentConcurrentMock(unittest.TestCase):
         agent._cell_chain = MagicMock(invoke=fake_invoke)
 
         with patch(
-            "retriever.orchestration.build_indexed_retrieval_corpus",
+            "retriever.retrieval_pipeline.build_indexed_retrieval_corpus",
             return_value=MagicMock(merged_docs=[{"file_id": "fid"}], all_chunks=[]),
         ), patch(
-            "retriever.orchestration.run_retrieval_pipeline",
+            "retriever.retrieval_pipeline.run_retrieval_pipeline",
             side_effect=fake_pipeline,
         ):
             table = agent._fill_table_concurrent(
@@ -147,10 +147,10 @@ class TestCustomerSegmentationAgentConcurrentMock(unittest.TestCase):
         agent._cell_chain = MagicMock(invoke=fake_invoke)
 
         with patch(
-            "retriever.orchestration.build_indexed_retrieval_corpus",
+            "retriever.retrieval_pipeline.build_indexed_retrieval_corpus",
             return_value=MagicMock(merged_docs=[{"file_id": "fid"}], all_chunks=[]),
         ), patch(
-            "retriever.orchestration.run_retrieval_pipeline",
+            "retriever.retrieval_pipeline.run_retrieval_pipeline",
             side_effect=fake_pipeline,
         ):
             table = agent._fill_table_concurrent(
@@ -179,9 +179,9 @@ class TestCustomerSegmentationAgentConcurrentMock(unittest.TestCase):
 
 class TestOrchestratorCsGuard(unittest.TestCase):
     def test_run_fill_cs_placeholders_without_segments_raises(self) -> None:
-        from generation.orchestrator import run_fill
+        from generation.fill_pipeline import run_fill
 
-        with patch("generation.orchestrator.get_segment_names", return_value=None):
+        with patch("generation.fill_pipeline.get_segment_names", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:
                 run_fill(
                     slide_idx=1,

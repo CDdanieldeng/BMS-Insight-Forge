@@ -9,7 +9,7 @@ from shared.logging_config import setup_logging
 from shared.llm_client import complete
 from generation.context_provider import get_context_content
 from modules._slide_registry import get_prompt_builder
-from generation.stage_metrics import run_scope, stage_scope
+from shared.stage_metrics import run_scope, stage_scope
 
 logger = setup_logging("modules")
 

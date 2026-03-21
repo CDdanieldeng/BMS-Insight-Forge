@@ -1,4 +1,4 @@
-"""FastAPI router for the generation service (orchestrator)."""
+"""FastAPI router for the generation service (slide table fill)."""
 
 from typing import Any
 from typing import Literal
@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from modules._feedback_agent import answer_question
 from modules._common import get_shared_fix_table_agent
 from modules._registry import get_module
-from generation.orchestrator import run_fill, generate_key_question_answers
+from generation.fill_pipeline import generate_key_question_answers, run_fill
 
 router = APIRouter(prefix="/generation", tags=["generation"])
 logger = __import__("logging").getLogger("generation")

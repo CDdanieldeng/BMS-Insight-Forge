@@ -15,7 +15,7 @@ from shared.logging_config import setup_logging
 
 from fill_engine.router import router as fill_engine_router
 from generation.router import router as generation_router
-from generation.ingest_router import router as document_ingest_router
+from documents.ingest_router import router as document_ingest_router
 from modules.cowork.router import router as cowork_agent_router
 from web_search.router import router as web_search_router
 from voice.router import router as voice_router

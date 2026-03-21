@@ -3,6 +3,8 @@
 import re
 from typing import Any
 
+from shared.text_utils import normalize_label
+
 # Module-level cache: module_name -> (segment_names, slide_idx).
 # Populated on the first CS slide that triggers extraction; reused only on
 # subsequent slides (slide_idx > cached_slide_idx) of the same module.
@@ -12,10 +14,6 @@ _segment_name_cache: dict[str, tuple[list[str], int]] = {}
 # Module-level cache: slide_idx -> generated table metadata.
 # Used to provide prior slide table outputs as context for downstream slides.
 _slide_table_cache: dict[int, dict[str, Any]] = {}
-
-
-def _normalize_label(label: str) -> str:
-    return " ".join((label or "").strip().lower().split())
 
 
 def get_segment_names(module: str, current_slide_idx: int) -> list[str] | None:
@@ -100,13 +98,13 @@ def extract_prioritized_segments_from_customer_segmentation(
     candidate_slides = sorted(idx for idx in _slide_table_cache if idx < current_slide_idx)
     for idx in reversed(candidate_slides):
         cached = _slide_table_cache[idx]
-        if _normalize_label(str(cached.get("module", ""))) != "customer segmentation":
+        if normalize_label(str(cached.get("module", ""))) != "customer segmentation":
             continue
 
         headers = [str(h).strip() for h in (cached.get("column_headers") or []) if str(h).strip()]
         row_labels = [str(r).strip() for r in (cached.get("indexes") or [])]
         table_data = cached.get("table_data") or []
-        normalized_rows = [_normalize_label(r) for r in row_labels]
+        normalized_rows = [normalize_label(r) for r in row_labels]
         if "segment prioritization" not in normalized_rows:
             continue
 

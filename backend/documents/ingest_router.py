@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, File, UploadFile
 
-from generation.document_store import ingest_files
+from documents.document_store import ingest_files
 
 router = APIRouter(prefix="/document", tags=["document"])
 

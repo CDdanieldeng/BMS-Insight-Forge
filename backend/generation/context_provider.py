@@ -12,7 +12,7 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.document_store import get_full_markdown_context as _get_full_markdown
+from documents.document_store import get_full_markdown_context as _get_full_markdown
 
 logger = setup_logging("generation")
 
@@ -34,8 +34,8 @@ def get_retrieval_context(
         Tuple of (content, metadata). metadata has recalled_count, reranked_count,
         fallback_used.
     """
-    from generation.stage_metrics import record_stage_metadata, stage_scope
-    from retriever.orchestration import run_retrieval_pipeline
+    from shared.stage_metrics import record_stage_metadata, stage_scope
+    from retriever.retrieval_pipeline import run_retrieval_pipeline
 
     metadata: dict[str, Any] = {
         "recalled_count": 0,

@@ -13,13 +13,13 @@ from shared.logging_config import setup_logging
 
 logger = setup_logging("llm")
 
-# Optional callback for usage recording (e.g. generation.stage_metrics).
+# Optional callback for usage recording (e.g. shared.stage_metrics).
 # Set via set_llm_usage_callback() from generation or other consumers.
 _usage_callback: Callable[..., None] | None = None
 
 
 def set_llm_usage_callback(cb: Callable[..., None] | None) -> None:
-    """Register a callback to record LLM usage. Called from generation/stage_metrics at startup."""
+    """Register a callback to record LLM usage. Called from generation/__init__ at startup."""
     global _usage_callback
     _usage_callback = cb
 

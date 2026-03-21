@@ -1,4 +1,4 @@
-"""Orchestrator: coordinates retriever, fill engine, and LLM."""
+"""Slide table fill pipeline: coordinates retriever, context, caches, and LLM."""
 
 import json
 import os
@@ -19,16 +19,16 @@ from generation.module_handlers import (
     merge_context_for_slide,
     postprocess_table_for_slide,
 )
-from generation.utils import has_placeholder_columns, normalize_label
+from shared.text_utils import has_placeholder_columns, normalize_label
 from generation.segment_extractor import extract_segment_names
-from generation.stage_metrics import run_scope, stage_scope
+from shared.stage_metrics import run_scope, stage_scope
 from generation.table_generator import generate_table_content
 from generation.session_cache import (
     get_segment_names,
     set_segment_names,
     set_slide_table,
 )
-from generation.trace_writer import (
+from shared.trace_writer import (
     write_fill_trace,
     write_key_answers_trace,
     write_segment_header_trace,

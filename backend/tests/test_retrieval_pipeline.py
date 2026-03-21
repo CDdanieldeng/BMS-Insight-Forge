@@ -1,7 +1,7 @@
 """
-Simple test for retriever orchestration.
+Simple test for the retriever pipeline.
 
-Run from backend: python tests/test_retrieval_orchestration.py
+Run from backend: python tests/test_retrieval_pipeline.py
 
 Shows: the query and which chunks finally remained after recall + rerank.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from retriever.orchestration import run_retrieval_pipeline
+from retriever.retrieval_pipeline import run_retrieval_pipeline
 
 # ---------------------------------------------------------------------------
 # Example HCP transcript (your sample file)

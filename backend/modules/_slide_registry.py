@@ -28,11 +28,6 @@ def _ensure_modules_loaded() -> None:
         _modules_loaded = True
 
 
-def normalize_label(label: str) -> str:
-    """Normalize row label for comparison (lowercase, collapsed whitespace)."""
-    return " ".join((label or "").strip().lower().split())
-
-
 def get_prompt_builder(module: str) -> PromptBuilder | None:
     """Return the slide-specific prompt builder for *module*, or None."""
     _ensure_modules_loaded()

@@ -17,7 +17,7 @@ class MessagingStrategyProvider:
         return CONFIG
 
     def get_table_fill_agent(self):
-        return None  # Uses standard orchestrator path
+        return None  # Uses standard fill pipeline path
 
     def get_cowork_agent(self):
         return None  # No cowork mode for Messaging Strategy yet

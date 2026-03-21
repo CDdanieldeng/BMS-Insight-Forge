@@ -1,5 +1,5 @@
 """
-Retrieval orchestration: query rewrite → facet → chunk → embed → recall → rerank.
+Retrieval pipeline: query rewrite → facet → chunk → embed → recall → rerank.
 
 Single entrypoint that runs the full retriever pipeline and returns final chunks
 with metadata (recalled_count, reranked_count) for observability.
@@ -13,7 +13,7 @@ from typing import Any
 
 from shared.logging_config import setup_logging
 
-from generation.document_store import get_document_text, get_document_meta
+from documents.document_store import get_document_meta, get_document_text
 from .chunking import chunk_text
 from .embedding import embed
 from .facet import DocumentFacet, classify_document_facet

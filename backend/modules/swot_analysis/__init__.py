@@ -18,7 +18,7 @@ class SwotAnalysisProvider:
         return CONFIG
 
     def get_table_fill_agent(self):
-        return None  # Uses standard orchestrator path for now
+        return None  # Uses standard fill pipeline path for now
 
     def get_cowork_agent(self):
         if self._cowork_agent is None:

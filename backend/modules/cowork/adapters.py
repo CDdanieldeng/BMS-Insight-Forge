@@ -59,7 +59,7 @@ class ExistingDraftingService(DraftingService):
         file_ids: list[str],
         table_structure: dict[str, Any],
     ) -> tuple[list[list[str]], list[str]]:
-        from generation.orchestrator import run_fill
+        from generation.fill_pipeline import run_fill
 
         result = run_fill(
             slide_idx=slide_idx,
