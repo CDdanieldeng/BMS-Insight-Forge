@@ -11,6 +11,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from auth.middleware import EntraAuthMiddleware
 from shared.logging_config import setup_logging
 
 from fill_engine.router import router as fill_engine_router
@@ -45,6 +46,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Insight-Forge-Slide-Preview"],
 )
+app.add_middleware(EntraAuthMiddleware)
 
 app.include_router(generation_router)
 app.include_router(document_ingest_router)

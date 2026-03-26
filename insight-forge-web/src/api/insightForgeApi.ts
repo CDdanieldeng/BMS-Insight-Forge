@@ -11,6 +11,8 @@ import type {
 } from '@/types'
 import { jsonToBase64, base64ToArrayBuffer } from '@/utils/b64'
 
+import { getAuthorizationHeaders } from '@/auth/authFetchHeaders'
+
 import { api } from './client'
 
 function historyForApi(messages: ChatMessage[]): { role: string; content: string }[] {
@@ -291,7 +293,10 @@ export async function transcribeVoiceStream(
   const audio_b64 = arrayBufferToBase64(wavBytes)
   const res = await fetch(`${api.defaults.baseURL}/voice/transcribe/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await getAuthorizationHeaders()),
+    },
     body: JSON.stringify({ audio_b64, language }),
   })
   if (!res.ok || !res.body) {

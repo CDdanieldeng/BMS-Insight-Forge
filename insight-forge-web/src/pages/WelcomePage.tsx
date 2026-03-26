@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { fetchSlideInfoFromPptx } from '@/api/insightForgeApi'
+import { EntraSessionBar } from '@/components/EntraSessionBar'
 import { ModuleIcon } from '@/components/ModuleIcon'
 import { MODULE_DESC, MODULES, ZS_LOGO_SRC } from '@/utils/constants'
 import { getTemplateFetchUrl } from '@/utils/env'
@@ -139,6 +140,7 @@ export function WelcomePage() {
         >
           Start
         </button>
+        <EntraSessionBar />
       </div>
     </div>
   )

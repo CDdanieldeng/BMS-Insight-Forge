@@ -9,6 +9,8 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Monorepo: VITE_* in repo-root .env (same file as backend)
+  envDir: path.resolve(__dirname, '..'),
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
