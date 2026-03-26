@@ -1,26 +1,16 @@
-import { useIsAuthenticated, useMsal } from '@azure/msal-react'
-
+import { useBackendAuthEnabled } from '@/auth/BackendAuthContext'
 import { isEntraAuthConfigured } from '@/auth/entraEnv'
+import { useEntraDirectoryAuth } from '@/auth/useEntraDirectoryAuth'
 
 export function EntraSessionBar() {
-  if (!isEntraAuthConfigured()) return null
+  const apiAuth = useBackendAuthEnabled()
+  if (!apiAuth || !isEntraAuthConfigured()) return null
   return <EntraSessionBarInner />
 }
 
 function EntraSessionBarInner() {
-  const { instance } = useMsal()
-  const isAuthenticated = useIsAuthenticated()
-  const scope = import.meta.env.VITE_ENTRA_API_SCOPE?.trim() ?? ''
-
-  if (!scope) return null
-
-  const login = () => {
-    void instance.loginPopup({ scopes: [scope] })
-  }
-
-  const logout = () => {
-    void instance.logoutPopup({ mainWindowRedirectUri: window.location.origin })
-  }
+  const { isAuthenticated, login, logout, scopeReady } = useEntraDirectoryAuth()
+  if (!scopeReady) return null
 
   return (
     <div className="mt-12 flex w-full max-w-sm flex-col items-center gap-2 border-t border-neutral-200/80 pt-8">

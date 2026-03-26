@@ -5,6 +5,8 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 
 import App from '@/App.tsx'
+import { BackendAuthEnabledProvider } from '@/auth/BackendAuthContext'
+import { fetchBackendAuthEnabled } from '@/auth/backendAuthFromApi'
 import { createMsalInstance } from '@/auth/msalInstance'
 import '@/index.css'
 
@@ -15,7 +17,8 @@ const queryClient = new QueryClient({
 })
 
 async function bootstrap() {
-  const msal = createMsalInstance()
+  const apiAuthEnabled = await fetchBackendAuthEnabled()
+  const msal = createMsalInstance(apiAuthEnabled)
   if (msal) {
     await msal.initialize()
     const accounts = msal.getAllAccounts()
@@ -27,15 +30,17 @@ async function bootstrap() {
   const shell = (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          {msal ? (
-            <MsalProvider instance={msal}>
+        <BackendAuthEnabledProvider value={apiAuthEnabled}>
+          <BrowserRouter>
+            {msal ? (
+              <MsalProvider instance={msal}>
+                <App />
+              </MsalProvider>
+            ) : (
               <App />
-            </MsalProvider>
-          ) : (
-            <App />
-          )}
-        </BrowserRouter>
+            )}
+          </BrowserRouter>
+        </BackendAuthEnabledProvider>
       </QueryClientProvider>
     </StrictMode>
   )

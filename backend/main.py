@@ -11,6 +11,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from auth.entra_jwt import AUTH_ENABLED
 from auth.middleware import EntraAuthMiddleware
 from shared.logging_config import setup_logging
 
@@ -58,4 +59,4 @@ app.include_router(voice_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "auth_enabled": AUTH_ENABLED}

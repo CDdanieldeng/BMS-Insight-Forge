@@ -10,9 +10,12 @@ import { getEntraAuthEnv, isEntraAuthConfigured } from '@/auth/entraEnv'
 
 let instance: PublicClientApplication | null = null
 
-/** Creates the singleton MSAL instance when Entra auth is enabled and required env is present. */
-export function createMsalInstance(): PublicClientApplication | null {
-  if (!isEntraAuthConfigured()) return null
+/**
+ * Creates the singleton MSAL instance when the API requires auth (`AUTH_ENABLED`), Entra is
+ * enabled in Vite env, and client/tenant/scope are set.
+ */
+export function createMsalInstance(apiAuthEnabled: boolean): PublicClientApplication | null {
+  if (!apiAuthEnabled || !isEntraAuthConfigured()) return null
   const { clientId, tenantId } = getEntraAuthEnv()
   if (!instance) {
     const config: Configuration = {
