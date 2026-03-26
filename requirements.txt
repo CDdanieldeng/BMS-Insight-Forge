@@ -1,2 +1,2 @@
 # Shared base dependencies for Insight Forge
-# Backend and frontend have their own requirements.txt
+# Backend: backend/requirements.txt | Web UI: insight-forge-web (npm)

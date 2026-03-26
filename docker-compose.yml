@@ -19,20 +19,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-
-  frontend:
-    image: bms-insight-forge/frontend:v1.0.0
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "8503:8503"
-    env_file:
-      - .env
-    environment:
-      - BACKEND_URL=http://backend:8001
-    volumes:
-      - ./example_files:/app/example_files:ro
-    depends_on:
-      backend:
-        condition: service_healthy

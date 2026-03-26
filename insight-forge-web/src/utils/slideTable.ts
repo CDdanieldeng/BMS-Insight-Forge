@@ -11,8 +11,7 @@ export interface NormalizedSlideTable {
 }
 
 /**
- * Mirrors Streamlit `render_slide_content` table normalization so the React slide
- * preview matches filled / unfilled behavior.
+ * Normalizes slide table structure for preview so filled / unfilled tables render consistently.
  */
 export function buildNormalizedSlideTable(
   slideMeta: SlideMeta,

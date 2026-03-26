@@ -281,8 +281,8 @@ def transcribe_wav_bytes(wav_bytes: bytes, **kwargs) -> str:
     """
     Transcribe audio bytes (WAV, WebM/Opus, etc.). Converts to PCM 16kHz if needed.
 
-    Browser MediaRecorder typically outputs WebM/Opus; streamlit-mic-recorder
-    may send WebM rather than WAV. Uses from_file() so pydub can auto-detect format.
+    Browser MediaRecorder typically outputs WebM/Opus (not always WAV). Uses
+    from_file() so pydub can auto-detect format.
 
     Args:
         wav_bytes: Audio file bytes (WAV, WebM, etc. from mic recorder).
