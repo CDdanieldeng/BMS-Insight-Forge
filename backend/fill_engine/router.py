@@ -11,8 +11,10 @@ from fill_engine.engine import (
     get_slide_info,
     get_table_structure,
     load_presentation,
+    read_presentation_bytes,
 )
 from fill_engine.slide_renderer import render_slide_to_png
+from fill_engine.slide_rasterize import rasterize_pptx_slide_to_png
 from fill_engine.swot_placeholder_fill import (
     fill_swot_placeholders,
     table_data_to_swot_values,
@@ -184,25 +186,42 @@ async def render_slide_png(
     path: str | None = Form(None),
 ) -> Response:
     """
-    Render a slide to PNG using matplotlib with BMS-branded table styling.
+    Full-slide PNG preview when possible: LibreOffice (pptx→pdf) + PyMuPDF raster.
+    Falls back to matplotlib (title + extracted table redraw) if raster tools are missing.
     Provide either file upload or path.
     """
     if file:
         if not file.filename or not file.filename.lower().endswith(".pptx"):
             raise HTTPException(status_code=400, detail="Expected .pptx file")
         content = await file.read()
-        prs = load_presentation(pptx_bytes=content)
     elif path:
-        prs = load_presentation(pptx_path=path)
+        try:
+            content = read_presentation_bytes(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Presentation not found") from None
     else:
         raise HTTPException(status_code=400, detail="Provide file or path")
 
+    prs = load_presentation(pptx_bytes=content)
     if slide_idx < 0 or slide_idx >= len(prs.slides):
         raise HTTPException(status_code=400, detail=f"Invalid slide_idx: {slide_idx}")
 
     try:
-        png_bytes = render_slide_to_png(prs, slide_idx)
-        return Response(content=png_bytes, media_type="image/png")
+        png_bytes = rasterize_pptx_slide_to_png(content, slide_idx)
+        preview_source = "raster"
+        if png_bytes is None:
+            logger.info(
+                "render-slide-png: LibreOffice/PyMuPDF raster unavailable "
+                "(install both for full-slide preview); using matplotlib for slide_idx=%s",
+                slide_idx,
+            )
+            png_bytes = render_slide_to_png(prs, slide_idx)
+            preview_source = "matplotlib"
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={"X-Insight-Forge-Slide-Preview": preview_source},
+        )
     except Exception as e:
         logger.exception("Failed to render slide: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

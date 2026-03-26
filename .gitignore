@@ -23,6 +23,11 @@ Thumbs.db
 # Project
 *.pptx
 !example_files/*.pptx
+!insight-forge-web/public/template.pptx
+
+insight-forge-web/node_modules/
+insight-forge-web/dist/
 
 # logs
 backend/logs/
+backend/saved_chunks/

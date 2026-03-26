@@ -178,21 +178,47 @@ class TestCustomerSegmentationAgentConcurrentMock(unittest.TestCase):
 
 
 class TestOrchestratorCsGuard(unittest.TestCase):
-    def test_run_fill_cs_placeholders_without_segments_raises(self) -> None:
+    def test_run_fill_cs_placeholders_extracts_when_no_cowork_or_cache(self) -> None:
         from generation.orchestrator import run_fill
 
+        fake_agent = MagicMock()
+        fake_agent.run.return_value = {
+            "segment_names": ["FromAgent"],
+            "table_data": [["cell"]],
+            "maturity": "test",
+        }
+        fake_provider = MagicMock()
+        fake_provider.get_table_fill_agent.return_value = fake_agent
+
         with patch("generation.orchestrator.get_segment_names", return_value=None):
-            with self.assertRaises(RuntimeError) as ctx:
-                run_fill(
-                    slide_idx=1,
-                    module="Customer Segmentation",
-                    file_ids=["f1"],
-                    table_structure={
-                        "columns": ["", "Segment 1"],
-                        "indexes": ["A"],
-                    },
-                )
-            self.assertIn("segment names", str(ctx.exception).lower())
+            with patch(
+                "generation.orchestrator.get_full_markdown_context",
+                return_value="markdown context",
+            ):
+                with patch(
+                    "generation.orchestrator.extract_segment_names",
+                    return_value=["Extracted"],
+                ) as ext:
+                    with patch(
+                        "modules._registry.get_module",
+                        return_value=fake_provider,
+                    ):
+                        with patch("generation.orchestrator.set_segment_names"):
+                            with patch("generation.orchestrator.set_slide_table"):
+                                with patch("generation.orchestrator.write_fill_trace"):
+                                    result = run_fill(
+                                        slide_idx=1,
+                                        module="Customer Segmentation",
+                                        file_ids=["f1"],
+                                        table_structure={
+                                            "columns": ["", "Segment 1"],
+                                            "indexes": ["A"],
+                                        },
+                                    )
+        ext.assert_called_once()
+        fake_agent.run.assert_called_once()
+        self.assertEqual(result["column_headers"], ["FromAgent"])
+        self.assertEqual(result["table_data"], [["cell"]])
 
 
 if __name__ == "__main__":

@@ -207,9 +207,8 @@ def run_fill(
         is_swot = normalize_label(module) == "swot analysis"
 
         # ── Customer Segmentation Agent path ──────────────────────────────────
-        # Per-cell retrieval + LLM fill. Segment column names must come from
-        # cowork_guidance.segment_names or from a prior cached fill — not from
-        # document-only extraction.
+        # Per-cell retrieval + LLM fill. Prefer cowork segment names or cache;
+        # otherwise extract from uploads (shared segment-name LLM).
         if has_placeholder_columns(placeholder_cols) and not is_ms_slide3 and _is_cs:
             with stage_scope("customer_segmentation_agent"):
                 n_segments = len(placeholder_cols)
@@ -239,11 +238,18 @@ def run_fill(
                         resolved_segments,
                     )
                 else:
-                    raise RuntimeError(
-                        "Customer Segmentation slide 1 requires segment names from the "
-                        "cowork session (agreed segments) or a prior successful fill cached "
-                        "for this module. End the cowork conversation with segment names, or "
-                        "re-run fill after segment names were cached."
+                    logger.info(
+                        "CS agent: no cowork/cache segment names; extracting from "
+                        "uploads module=%s n=%d",
+                        module,
+                        n_segments,
+                    )
+                    segment_seed_content = get_full_markdown_context(file_ids)
+                    resolved_segments = extract_segment_names(
+                        segment_seed_content,
+                        n_segments,
+                        module,
+                        trace_writer=write_segment_header_trace,
                     )
 
                 while len(resolved_segments) < n_segments:

@@ -90,6 +90,14 @@ def load_presentation(pptx_bytes: bytes | None = None, pptx_path: str | Path | N
     raise ValueError("Provide pptx_bytes or pptx_path")
 
 
+def read_presentation_bytes(pptx_path: str | Path) -> bytes:
+    """Read a .pptx from disk (same path resolution as load_presentation)."""
+    path = _resolve_pptx_path(pptx_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Presentation not found: {path}")
+    return path.read_bytes()
+
+
 def get_slide_info(pptx_bytes: bytes | None = None, pptx_path: str | Path | None = None) -> list[dict[str, Any]]:
     """
     Parse pptx and return slide metadata: idx, is_fillable, module, table_structure.

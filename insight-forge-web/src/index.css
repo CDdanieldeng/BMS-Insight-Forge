@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 font-sans;
+}
+
+/* Prose inside chat bubbles */
+.if-md {
+  @apply text-[0.875rem] leading-relaxed text-neutral-800;
+}
+.if-md p {
+  @apply my-1.5 first:mt-0 last:mb-0;
+}
+.if-md ul,
+.if-md ol {
+  @apply my-2 pl-5;
+}
+.if-md li {
+  @apply my-0.5;
+}
+.if-md code {
+  @apply rounded bg-neutral-100 px-1 py-0.5 text-[0.82em];
+}
+.if-md pre {
+  @apply my-2 overflow-x-auto rounded-lg bg-neutral-100 p-3 text-[0.82em];
+}
+.if-md pre code {
+  @apply bg-transparent p-0;
+}
+.if-md strong {
+  @apply font-semibold text-neutral-900;
+}
+
+@keyframes if-pulse-soft {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.if-pulse-dot {
+  animation: if-pulse-soft 1.25s ease-in-out infinite;
+}
+
+/* Copilot message list: visible, thin scrollbar */
+.if-chat-messages {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(163 163 163 / 0.85) transparent;
+}
+.if-chat-messages::-webkit-scrollbar {
+  width: 8px;
+}
+.if-chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+.if-chat-messages::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgb(163 163 163 / 0.65);
+}
+.if-chat-messages::-webkit-scrollbar-thumb:hover {
+  background: rgb(115 115 115 / 0.75);
+}

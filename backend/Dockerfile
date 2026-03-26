@@ -2,8 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# pydub 需要 ffmpeg/ffprobe 处理/检测音频格式
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# ffmpeg/ffprobe: pydub; libreoffice-impress: full-slide PPTX preview (pptx → pdf → png)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

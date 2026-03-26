@@ -41,7 +41,7 @@ if not _template_candidate.is_absolute() or not _template_candidate.exists():
 elif _template_candidate.exists():
     TEMPLATE_PATH = str(_template_candidate.resolve())
 
-PRODUCTS = ["Select a product...", "Sotyktu", "Product B", "Product C", "Product D"]
+PRODUCTS = ["Select a product...", "Product A", "Product B", "Product C", "Product D"]
 MODULES = ["Customer Segmentation", "SWOT Analysis", "Messaging Strategy"]
 MODULE_ICONS = {
     "Customer Segmentation": "👥",
