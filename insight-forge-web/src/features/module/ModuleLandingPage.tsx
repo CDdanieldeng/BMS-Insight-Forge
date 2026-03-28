@@ -2,11 +2,18 @@ import type { ModuleName, SlideMeta } from '@/types'
 import { ModuleIcon } from '@/components/ModuleIcon'
 import { MODULE_DESC } from '@/utils/constants'
 import { useAppStore } from '@/store/appStore'
+import { ModuleLandingCoworkBlock } from '@/features/module/ModuleLandingCoworkBlock'
+
+function moduleHasLandingCowork(module: ModuleName): boolean {
+  return module === 'Customer Segmentation' || module === 'SWOT Analysis'
+}
 
 export function ModuleLandingPage({ module, slides }: { module: ModuleName; slides: SlideMeta[] }) {
   const filledSlides = useAppStore((s) => s.filledSlides)
   const n = slides.length
   const done = slides.filter((s) => filledSlides.includes(s.idx)).length
+  const firstSlide = slides[0]
+  const showCoworkBlock = moduleHasLandingCowork(module) && firstSlide != null
 
   return (
     <div className="mx-auto max-w-3xl py-8 md:py-14">
@@ -27,10 +34,20 @@ export function ModuleLandingPage({ module, slides }: { module: ModuleName; slid
           {n === 0 ? 'No slides' : `${done} / ${n} slides complete`}
         </div>
         <p className="mt-8 text-xs text-neutral-400">
-          Use <span className="text-neutral-600">Next</span> to open the presentation workspace for
-          each slide.
+          {showCoworkBlock ? (
+            <>
+              Use <span className="text-neutral-600">Co-work</span> below to align on this module,
+              then <span className="text-neutral-600">Next</span> for each slide to review and refine.
+            </>
+          ) : (
+            <>
+              Use <span className="text-neutral-600">Next</span> to open the presentation workspace
+              for each slide.
+            </>
+          )}
         </p>
       </div>
+      {showCoworkBlock ? <ModuleLandingCoworkBlock module={module} slideMeta={firstSlide} /> : null}
     </div>
   )
 }

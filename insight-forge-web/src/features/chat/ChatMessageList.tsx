@@ -119,15 +119,23 @@ export function ChatMessageList({
   mode: ChatMode
   assistantLive?: ChatAssistantLive
 }) {
-  const showPreamble =
-    messages.length === 0 && (module === 'Customer Segmentation' || module === 'SWOT Analysis')
+  const isCsOrSwot = module === 'Customer Segmentation' || module === 'SWOT Analysis'
 
   return (
     <div className="flex flex-col gap-3 pr-1">
-      {showPreamble ? <CoworkPreamble module={module} mode={mode} /> : null}
-      {!showPreamble && messages.length === 0 ? (
+      {messages.length === 0 && isCsOrSwot && mode === 'cowork' ? (
+        <CoworkPreamble module={module} mode={mode} />
+      ) : null}
+      {messages.length === 0 && isCsOrSwot && mode === 'modify' ? (
         <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50/50 px-4 py-10 text-center text-xs text-neutral-400">
-          Choose co-work for guided completion, or fill the slide and use modify to refine.
+          Fill this slide using <span className="text-neutral-600">Generate</span>, then ask me to
+          refine. Use <span className="text-neutral-600">Co-work</span> on the module overview to
+          align on methodology first.
+        </div>
+      ) : null}
+      {messages.length === 0 && !isCsOrSwot ? (
+        <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50/50 px-4 py-10 text-center text-xs text-neutral-400">
+          Fill the slide and use modify to refine.
         </div>
       ) : null}
       {messages.map((msg, i) => {

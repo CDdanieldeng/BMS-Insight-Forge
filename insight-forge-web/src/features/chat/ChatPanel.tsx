@@ -2,15 +2,21 @@ import { useEffect, useRef } from 'react'
 
 import type { ChatAssistantLive, ChatMessage, ChatMode, ModuleName, SlideMeta } from '@/types'
 
-import { ChatComposer } from '@/features/chat/ChatComposer'
+import {
+  ChatComposer,
+  type ChatComposerVariant,
+  type ChatLandingToolbar,
+} from '@/features/chat/ChatComposer'
 import { ChatMessageList } from '@/features/chat/ChatMessageList'
+
+export type { ChatComposerVariant, ChatLandingToolbar }
 
 export function ChatPanel({
   module,
   slideMeta,
   messages,
   mode,
-  onModeChange,
+  composerVariant = 'modifyLocked',
   onSend,
   onClear,
   onEndConversation,
@@ -18,12 +24,13 @@ export function ChatPanel({
   onCoworkFill,
   disabled,
   assistantLive,
+  landingToolbar,
 }: {
   module: ModuleName
   slideMeta: SlideMeta
   messages: ChatMessage[]
   mode: ChatMode
-  onModeChange: (m: ChatMode) => void
+  composerVariant?: ChatComposerVariant
   onSend: (text: string) => void
   onClear: () => void
   onEndConversation: () => void
@@ -31,6 +38,7 @@ export function ChatPanel({
   onCoworkFill: () => void
   disabled: boolean
   assistantLive?: ChatAssistantLive
+  landingToolbar?: ChatLandingToolbar
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -63,14 +71,14 @@ export function ChatPanel({
       </div>
       <ChatComposer
         module={module}
-        mode={mode}
-        onModeChange={onModeChange}
+        variant={composerVariant}
         onSend={onSend}
         onClear={onClear}
         onEndConversation={onEndConversation}
         coworkReady={coworkReady}
         onCoworkFill={onCoworkFill}
         disabled={disabled}
+        landingToolbar={landingToolbar}
       />
     </div>
   )

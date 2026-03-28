@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { ChatMode, ModuleName } from '@/types'
-import { getVoiceLanguage } from '@/utils/env'
 import { transcribeVoiceStream } from '@/api/insightForgeApi'
+import type { ModuleName, WebSearchResult } from '@/types'
+import { getVoiceLanguage } from '@/utils/env'
+
+export type ChatComposerVariant = 'coworkLocked' | 'modifyLocked'
+
+/** Compact ingest / web controls for the module landing copilot */
+export type ChatLandingToolbar = {
+  fileCount: number
+  onIngest: (files: File[]) => void
+  wsQuery: string
+  wsResults: WebSearchResult[]
+  onWebSearch: (q: string) => void
+  onWebClear: () => void
+}
 
 function pickRecorderMime(): string | undefined {
   const candidates = [
@@ -38,32 +50,39 @@ function MicIcon({ className }: { className?: string }) {
 
 export function ChatComposer({
   module,
-  mode,
-  onModeChange,
+  variant = 'modifyLocked',
   onSend,
   onClear,
   onEndConversation,
   coworkReady,
   onCoworkFill,
   disabled,
+  landingToolbar,
 }: {
   module: ModuleName
-  mode: ChatMode
-  onModeChange: (m: ChatMode) => void
+  variant?: ChatComposerVariant
   onSend: (text: string) => void
   onClear: () => void
   onEndConversation: () => void
   coworkReady: boolean
   onCoworkFill: () => void
   disabled: boolean
+  landingToolbar?: ChatLandingToolbar
 }) {
   const [text, setText] = useState('')
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  const [webOpen, setWebOpen] = useState(false)
+  const [webLocalQ, setWebLocalQ] = useState(landingToolbar?.wsQuery ?? '')
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setWebLocalQ(landingToolbar?.wsQuery ?? '')
+  }, [landingToolbar?.wsQuery])
 
   useEffect(() => {
     return () => {
@@ -80,12 +99,12 @@ export function ChatComposer({
     }
   }, [])
 
-  const showCowork = module === 'Customer Segmentation' || module === 'SWOT Analysis'
+  const isCoworkLanding = variant === 'coworkLocked'
 
   const placeholder =
-    mode === 'cowork' && module === 'Customer Segmentation'
+    isCoworkLanding && module === 'Customer Segmentation'
       ? 'Collaborate step by step on segmentation…'
-      : mode === 'cowork' && module === 'SWOT Analysis'
+      : isCoworkLanding && module === 'SWOT Analysis'
         ? 'Align on emphasis and context for SWOT…'
         : 'Ask the model to refine this slide…'
 
@@ -165,23 +184,6 @@ export function ChatComposer({
   return (
     <div className="border-t border-neutral-100 bg-neutral-50/30 px-3 py-3 md:px-4">
       <div className="flex flex-wrap items-stretch gap-2">
-        {showCowork ? (
-          <div className="flex min-h-[2.75rem] shrink-0">
-            <select
-              value={mode}
-              disabled={disabled}
-              onChange={(e) => onModeChange(e.target.value as ChatMode)}
-              className="h-full min-w-[6.5rem] rounded-lg border border-neutral-200 bg-white px-2 py-2 text-xs leading-normal text-neutral-700 shadow-sm focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-            >
-              <option value="cowork">Co-work</option>
-              <option value="modify">Modify</option>
-            </select>
-          </div>
-        ) : (
-          <span className="flex h-full min-h-[2.75rem] shrink-0 items-center rounded-lg border border-transparent px-2 text-xs text-neutral-400">
-            Modify
-          </span>
-        )}
         <textarea
           rows={2}
           value={text}
@@ -238,7 +240,7 @@ export function ChatComposer({
         >
           Clear
         </button>
-        {showCowork ? (
+        {isCoworkLanding ? (
           <button
             type="button"
             disabled={disabled}
@@ -248,9 +250,130 @@ export function ChatComposer({
             End conversation
           </button>
         ) : null}
+        {landingToolbar ? (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pptx,.docx,.doc,.md,.pdf"
+              className="hidden"
+              disabled={disabled}
+              onChange={(e) => {
+                const fs = [...(e.target.files ?? [])]
+                if (fs.length) landingToolbar.onIngest(fs)
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              disabled={disabled}
+              title="Upload module files (PPTX, DOCX, DOC, MD, PDF). Replaces this module’s retrieval set."
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded-lg border border-neutral-200 bg-white px-2.5 py-2 text-[11px] font-medium text-neutral-700 shadow-sm hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Upload{landingToolbar.fileCount ? ` · ${landingToolbar.fileCount}` : ''}
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              title="Search the web for context"
+              onClick={() => setWebOpen((o) => !o)}
+              className={`rounded-lg border px-2.5 py-2 text-[11px] font-medium shadow-sm disabled:cursor-not-allowed disabled:opacity-40 ${
+                webOpen
+                  ? 'border-neutral-800 bg-neutral-900 text-white'
+                  : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50'
+              }`}
+            >
+              Web
+            </button>
+          </>
+        ) : null}
       </div>
 
-      {coworkReady ? (
+      {landingToolbar && webOpen ? (
+        <div className="mt-2 max-h-52 overflow-y-auto rounded-xl border border-neutral-200/80 bg-white px-2.5 py-2 shadow-sm">
+          <div className="flex gap-1.5">
+            <input
+              value={webLocalQ}
+              onChange={(e) => setWebLocalQ(e.target.value)}
+              disabled={disabled}
+              placeholder="Search the web…"
+              autoComplete="off"
+              className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-[11px] text-neutral-800 placeholder:text-neutral-400 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const q = webLocalQ.trim()
+                  if (q) landingToolbar.onWebSearch(q)
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                const q = webLocalQ.trim()
+                if (q) landingToolbar.onWebSearch(q)
+              }}
+              className="shrink-0 rounded-lg bg-neutral-900 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-neutral-800 disabled:opacity-40"
+            >
+              Go
+            </button>
+          </div>
+          {landingToolbar.wsResults.length > 0 ? (
+            <div className="mt-2 space-y-1.5 border-t border-neutral-100 pt-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-[10px] text-neutral-500">
+                  {landingToolbar.wsQuery ? (
+                    <>
+                      Results for <span className="text-neutral-700">{landingToolbar.wsQuery}</span>
+                    </>
+                  ) : (
+                    'Results'
+                  )}
+                </p>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => landingToolbar.onWebClear()}
+                  className="text-[10px] text-neutral-400 hover:text-neutral-700"
+                >
+                  Clear
+                </button>
+              </div>
+              <ul className="space-y-1">
+                {landingToolbar.wsResults.slice(0, 4).map((r, i) => (
+                  <li key={i}>
+                    <details className="group rounded-md border border-neutral-200/80 bg-neutral-50/50">
+                      <summary className="cursor-pointer list-none px-2 py-1.5 text-[10px] font-medium text-neutral-800 marker:content-none [&::-webkit-details-marker]:hidden">
+                        <span className="mr-0.5 text-neutral-300 group-open:rotate-90">▸</span>
+                        {r.title || `Result ${i + 1}`}
+                      </summary>
+                      <div className="border-t border-neutral-100 px-2 py-1.5">
+                        {r.url ? (
+                          <a
+                            href={r.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mb-0.5 block break-all text-[10px] text-neutral-500 underline-offset-2 hover:underline"
+                          >
+                            {r.url}
+                          </a>
+                        ) : null}
+                        <p className="whitespace-pre-wrap break-words text-[10px] leading-relaxed text-neutral-600">
+                          {r.content}
+                        </p>
+                      </div>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {isCoworkLanding && coworkReady ? (
         <button
           type="button"
           disabled={disabled}

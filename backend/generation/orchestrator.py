@@ -157,6 +157,7 @@ Context:
                 return [{"question": q, "answer": "Answer generation failed."} for q in questions]
 
 
+# DEPRECATED client entry: module-landing-only fill (removed from web UI). Function remains supported.
 def run_fill(
     slide_idx: int,
     module: str,
@@ -167,6 +168,11 @@ def run_fill(
     """
     Orchestrate: enhance query -> retriever -> (optionally) extract segments
     -> generate table content.
+
+    **Deprecated client pattern:** filling only from the module overview / landing
+    page (never opening the slide workspace). Use slide-scoped fill from the
+    presentation workspace instead. This orchestrator entry point is **not**
+    deprecated and is still used for all server-side fills.
 
     Returns:
         {

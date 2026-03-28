@@ -331,7 +331,3 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   isSlideFilled: (slideIdx) => get().filledSlides.includes(slideIdx),
 }))
-
-export function defaultChatModeForModule(module: ModuleName): ChatMode {
-  return module === 'Messaging Strategy' ? 'modify' : 'cowork'
-}

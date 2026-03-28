@@ -16,6 +16,8 @@ logger = __import__("logging").getLogger("generation")
 
 
 class FillRequest(BaseModel):
+    """Request body for POST /generation/fill (slide-scoped deck generation)."""
+
     slide_idx: int
     module: str
     file_ids: list[str]
@@ -81,6 +83,7 @@ async def key_answers(req: KeyAnswersRequest) -> KeyAnswersResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# DEPRECATED client entry: module-landing-only fill (removed from web UI). Route remains supported.
 @router.post("/fill")
 async def fill(req: FillRequest) -> dict[str, Any]:
     """
@@ -91,6 +94,11 @@ async def fill(req: FillRequest) -> dict[str, Any]:
         table_data:     2-D array of cell values
         column_headers: list of real segment names (replaces placeholder headers),
                         or null if columns were not placeholders
+
+    **Deprecated client pattern:** invoking fill from the **module landing /
+    overview** page without opening the slide workspace. The web app no longer
+    exposes that entry point; use **Fill slide** from the slide workspace. This
+    ``POST /generation/fill`` route remains the supported API for generation.
     """
     try:
         result = run_fill(
