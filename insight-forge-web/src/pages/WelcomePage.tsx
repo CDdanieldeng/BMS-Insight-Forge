@@ -101,7 +101,7 @@ export function WelcomePage() {
             value={selectedProduct}
             onChange={(e) => setSelectedProduct(e.target.value)}
             autoComplete="off"
-            placeholder="e.g. Acme Platform"
+            placeholder="Repatha"
             required
             className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-800 shadow-sm placeholder:text-neutral-400 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-200"
           />
@@ -123,7 +123,7 @@ export function WelcomePage() {
             value={productDescription}
             onChange={(e) => setProductDescription(e.target.value)}
             autoComplete="off"
-            placeholder="Context for your plan — optional"
+            placeholder="PCSK9 inhibitor used to significantly lower LDL-C"
             className="mt-2 w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-800 shadow-sm placeholder:text-neutral-400 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-200"
           />
         </div>

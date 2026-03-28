@@ -7,6 +7,11 @@ export function isEntraAuthEnabled(): boolean {
   return truthy(import.meta.env.VITE_ENTRA_AUTH_ENABLED)
 }
 
+/** Both API (`AUTH_ENABLED`) and SPA opt in — session is required before the main app routes. */
+export function isEntraSignInRequired(apiAuthEnabled: boolean): boolean {
+  return apiAuthEnabled && isEntraAuthEnabled()
+}
+
 export function getEntraAuthEnv(): { clientId: string; tenantId: string } {
   return {
     clientId: (import.meta.env.VITE_ENTRA_CLIENT_ID ?? '').trim(),

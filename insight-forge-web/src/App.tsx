@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
-import { EntraAuthGate } from '@/auth/EntraAuthGate'
+import { EntraProtectedLayout } from '@/auth/EntraAuthGate'
 import { AppShell } from '@/components/AppShell'
+import { LoginPage } from '@/pages/LoginPage'
 import { ModuleWorkspace } from '@/pages/ModuleWorkspace'
 import { WelcomePage } from '@/pages/WelcomePage'
 import { useAppStore } from '@/store/appStore'
@@ -40,8 +41,9 @@ function ErrorBanner() {
 export default function App() {
   return (
     <AppShell banner={<ErrorBanner />}>
-      <EntraAuthGate>
-        <Routes>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<EntraProtectedLayout />}>
           <Route path="/" element={<WelcomeRoute />} />
           <Route
             path="/workspace"
@@ -52,8 +54,8 @@ export default function App() {
             }
           />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </EntraAuthGate>
+        </Route>
+      </Routes>
     </AppShell>
   )
 }

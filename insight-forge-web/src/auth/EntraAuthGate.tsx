@@ -1,11 +1,11 @@
-import type { ReactNode } from 'react'
+import { Navigate, Outlet } from 'react-router-dom'
 
 import { useBackendAuthEnabled } from '@/auth/BackendAuthContext'
-import { isEntraAuthConfigured } from '@/auth/entraEnv'
+import { isEntraAuthConfigured, isEntraSignInRequired } from '@/auth/entraEnv'
 import { useEntraDirectoryAuth } from '@/auth/useEntraDirectoryAuth'
 import { ZS_LOGO_SRC } from '@/utils/constants'
 
-function EntraSignInWall({ onSignIn }: { onSignIn: () => void }) {
+export function EntraSignInWall({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="mx-auto flex max-w-md flex-col items-center px-4 py-16 md:py-24">
       <img src={ZS_LOGO_SRC} alt="" className="h-10 w-auto md:h-12" aria-hidden />
@@ -35,19 +35,37 @@ function EntraSignInWall({ onSignIn }: { onSignIn: () => void }) {
   )
 }
 
-function EntraAuthGateInner({ children }: { children: ReactNode }) {
-  const { isAuthenticated, login, scopeReady } = useEntraDirectoryAuth()
-  if (!scopeReady) return children
-  if (!isAuthenticated) return <EntraSignInWall onSignIn={login} />
-  return children
+export function EntraMisconfiguredWall() {
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center px-4 py-16 md:py-24">
+      <img src={ZS_LOGO_SRC} alt="" className="h-10 w-auto md:h-12" aria-hidden />
+      <h1 className="mt-8 text-center text-xl font-semibold text-neutral-900">
+        Sign-in is not available
+      </h1>
+      <p className="mt-4 text-center text-sm leading-relaxed text-neutral-500">
+        The API expects Entra auth, but this build is missing{' '}
+        <span className="font-medium text-neutral-700">VITE_ENTRA_CLIENT_ID</span>,{' '}
+        <span className="font-medium text-neutral-700">VITE_ENTRA_TENANT_ID</span>, or{' '}
+        <span className="font-medium text-neutral-700">VITE_ENTRA_API_SCOPE</span>.
+      </p>
+    </div>
+  )
+}
+
+function EntraProtectedLayoutInner() {
+  const { isAuthenticated, scopeReady } = useEntraDirectoryAuth()
+  if (!scopeReady) return <Outlet />
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  return <Outlet />
 }
 
 /**
- * When the API has `AUTH_ENABLED` and Entra is configured in the SPA, blocks the app until
- * the user signs in.
+ * When both `AUTH_ENABLED` (API) and `VITE_ENTRA_AUTH_ENABLED` are on, and Entra env is
+ * complete, unauthenticated users are sent to `/login` instead of seeing the homepage.
  */
-export function EntraAuthGate({ children }: { children: ReactNode }) {
+export function EntraProtectedLayout() {
   const apiAuth = useBackendAuthEnabled()
-  if (!apiAuth || !isEntraAuthConfigured()) return children
-  return <EntraAuthGateInner>{children}</EntraAuthGateInner>
+  if (!isEntraSignInRequired(apiAuth)) return <Outlet />
+  if (!isEntraAuthConfigured()) return <EntraMisconfiguredWall />
+  return <EntraProtectedLayoutInner />
 }
