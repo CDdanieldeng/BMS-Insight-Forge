@@ -37,13 +37,25 @@ def verify_entra_access_token(token: str) -> dict:
             "ENTRA_TENANT_ID and ENTRA_API_AUDIENCE must be set when AUTH_ENABLED"
         )
 
-    issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
+    issuers = [
+        f"https://login.microsoftonline.com/{tenant}/v2.0",
+        f"https://sts.windows.net/{tenant}/",
+    ]
     jwks = _jwks_client(tenant)
     signing_key = jwks.get_signing_key_from_jwt(token)
-    return jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["RS256"],
-        audience=audiences,
-        issuer=issuer,
-    )
+
+    last_err: Exception | None = None
+    for issuer in issuers:
+        try:
+            return jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=audiences,
+                issuer=issuer,
+            )
+        except jwt.InvalidIssuerError as e:
+            last_err = e
+            continue
+
+    raise last_err or jwt.InvalidTokenError("Token issuer not recognized")

@@ -7,11 +7,11 @@ export function useEntraDirectoryAuth() {
 
   const login = () => {
     if (!scope) return
-    void instance.loginPopup({ scopes: [scope] })
+    void instance.loginRedirect({ scopes: [scope] })
   }
 
   const logout = () => {
-    void instance.logoutPopup({ mainWindowRedirectUri: window.location.origin })
+    void instance.logoutRedirect({ postLogoutRedirectUri: window.location.origin })
   }
 
   return { isAuthenticated, login, logout, scopeReady: Boolean(scope) }

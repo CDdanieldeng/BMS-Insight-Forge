@@ -21,6 +21,14 @@ async function bootstrap() {
   const msal = createMsalInstance(apiAuthEnabled)
   if (msal) {
     await msal.initialize()
+    try {
+      const result = await msal.handleRedirectPromise()
+      if (result?.account) {
+        msal.setActiveAccount(result.account)
+      }
+    } catch (e) {
+      console.error('[MSAL] handleRedirectPromise failed:', e)
+    }
     const accounts = msal.getAllAccounts()
     if (accounts[0]) {
       msal.setActiveAccount(accounts[0])
