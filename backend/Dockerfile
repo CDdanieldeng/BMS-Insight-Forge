@@ -1,6 +1,5 @@
-FROM ubuntu:22.04
+FROM python:3.11-slim
 
-# Headless LibreOffice on Jammy: writable profile, SVP backend (no X11)
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/tmp \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -10,37 +9,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-# ffmpeg/ffprobe: pydub
-# libreoffice-impress-nogui: PPTX→PDF for full-slide preview (no full desktop stack)
-# fonts: avoid empty/box glyphs in PDFs from headless conversion
-# Python 3.11: Jammy ships 3.10; deadsnakes matches prior python:3.11-slim image
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-        software-properties-common \
-    ; \
-    add-apt-repository -y ppa:deadsnakes/ppa; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        fonts-dejavu-core \
-        fonts-liberation \
-        libreoffice-impress-nogui \
-        python3.11 \
-        python3.11-venv \
-    ; \
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11; \
-    ln -sf /usr/bin/python3.11 /usr/local/bin/python; \
-    ln -sf /usr/bin/python3.11 /usr/local/bin/python3; \
-    apt-get purge -y --auto-remove curl gnupg software-properties-common; \
-    rm -rf /var/lib/apt/lists/*
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libreoffice-impress-nogui \
+    fonts-dejavu-core \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
+# 安装 Python 依赖
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host files.pythonhosted.org \
+    -r requirements.txt
 
+# 复制代码
 COPY . /app
 
+# 启动服务
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
