@@ -19,3 +19,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  frontend:
+    image: bms-insight-forge/frontend:v1.0.0
+    build:
+      context: .
+      dockerfile: insight-forge-web/Dockerfile
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8001}
+        VITE_TEMPLATE_FETCH_URL: ${VITE_TEMPLATE_FETCH_URL:-}
+        VITE_VOICE_INPUT_LANGUAGE: ${VITE_VOICE_INPUT_LANGUAGE:-}
+        VITE_ENTRA_AUTH_ENABLED: ${VITE_ENTRA_AUTH_ENABLED:-}
+        VITE_ENTRA_CLIENT_ID: ${VITE_ENTRA_CLIENT_ID:-}
+        VITE_ENTRA_TENANT_ID: ${VITE_ENTRA_TENANT_ID:-}
+        VITE_ENTRA_API_SCOPE: ${VITE_ENTRA_API_SCOPE:-}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
