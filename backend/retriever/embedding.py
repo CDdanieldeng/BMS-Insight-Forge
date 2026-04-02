@@ -107,7 +107,7 @@ class Qwen3Embedding4BEmbedder(BaseEmbedder):
         model: str | None = None,
         dimension: int | None = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("QWEN_EMBED_MODEL_API")
+        self._api_key = api_key or os.getenv("QWEN_API_KEY")
         self._base_url = base_url or os.getenv(
             "QWEN_EMBED_BASE_URL",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
